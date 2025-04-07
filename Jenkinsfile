@@ -21,6 +21,8 @@ pipeline {
         script {
             sh 'docker stop ${DOCKER_IMAGE} || true'
             sh 'docker rm ${DOCKER_IMAGE} || true'
+            
+            // Start container with logs visible
             sh """
             docker run -d \
                 --name ${DOCKER_IMAGE} \
@@ -28,19 +30,24 @@ pipeline {
                 ${DOCKER_IMAGE}:${DOCKER_TAG}
             """
             
-            // Wait for API to become healthy
-            def healthy = false
-            for (int i = 0; i < 10; i++) {
-                try {
-                    sh 'curl -f http://localhost:8000/health'
-                    healthy = true
-                    break
-                } catch (err) {
-                    sleep(5)
-                }
+            // Wait for container to start
+            sleep(10)
+            
+            // Check container status
+            def status = sh(returnStdout: true, script: "docker inspect -f '{{.State.Status}}' ${DOCKER_IMAGE}").trim()
+            if (status != "running") {
+                error("Container failed to start. Status: ${status}")
             }
-            if (!healthy) {
-                error("API failed to start")
+            
+            // Get container logs for debugging
+            sh "docker logs ${DOCKER_IMAGE} > container_logs.txt 2>&1"
+            archiveArtifacts artifacts: 'container_logs.txt'
+            
+            // Verify API health
+            try {
+                sh "curl -v --retry 5 --retry-delay 5 --max-time 10 http://localhost:8000/health"
+            } catch (err) {
+                error("API health check failed after container started")
             }
         }
     }

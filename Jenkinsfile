@@ -17,20 +17,34 @@ pipeline {
         }
         
         stage('Deploy API') {
-            steps {
-                sh 'docker stop ${DOCKER_IMAGE} || true'
-                sh 'docker rm ${DOCKER_IMAGE} || true'
-                sh """
-                docker run -d \
-                    --name ${DOCKER_IMAGE} \
-                    -p 8000:8000 \
-                    -e MODEL_PATH=/app/tiktok_scoring_model.pkl \
-                    -e SCALING_PARAMS_PATH=/app/scaling_params.pkl \
-                    ${DOCKER_IMAGE}:${DOCKER_TAG}
-                """
-                sleep(10)  // Wait for API to start
+    steps {
+        script {
+            sh 'docker stop ${DOCKER_IMAGE} || true'
+            sh 'docker rm ${DOCKER_IMAGE} || true'
+            sh """
+            docker run -d \
+                --name ${DOCKER_IMAGE} \
+                -p 8000:8000 \
+                ${DOCKER_IMAGE}:${DOCKER_TAG}
+            """
+            
+            // Wait for API to become healthy
+            def healthy = false
+            for (int i = 0; i < 10; i++) {
+                try {
+                    sh 'curl -f http://localhost:8000/health'
+                    healthy = true
+                    break
+                } catch (err) {
+                    sleep(5)
+                }
+            }
+            if (!healthy) {
+                error("API failed to start")
             }
         }
+    }
+}
         
         stage('Test API') {
             steps {

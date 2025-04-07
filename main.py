@@ -12,7 +12,7 @@ import httpx
 import pandas as pd
 import joblib
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
-from pydantic import BaseModel, HttpUrl, validator
+from pydantic import BaseModel, HttpUrl, validator, Field
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -68,26 +68,25 @@ except Exception as e:
 
 # --- Models ---
 class SocialMediaProfile(BaseModel):
-    name: str
+    social_media: str = Field(..., alias="social_medai")  # Handles both spellings
     username: str
 
-    @validator('name')
-    def name_must_be_valid(cls, v):
+    @validator('social_media')
+    def platform_must_be_valid(cls, v):
         if not v.strip():
             raise ValueError("Platform name cannot be empty")
         return v.lower()
 
 class VerificationRequest(BaseModel):
-    nationalId: str
-    socialMedia: List[SocialMediaProfile]
-    callback: Optional[HttpUrl] = None
+    fayda_number: str = Field(..., min_length=5)
+    type: str
+    data: List[SocialMediaProfile]
+    callbackUrl: Optional[HttpUrl] = None
 
-    @validator('nationalId')
-    def national_id_must_be_valid(cls, v):
-        if not v.strip():
-            raise ValueError("National ID cannot be empty")
-        if len(v) < 5:
-            raise ValueError("National ID too short")
+    @validator('type')
+    def type_must_be_valid(cls, v):
+        if v != "*SOCIAL_SCORE*":
+            raise ValueError("Type must be *SOCIAL_SCORE*")
         return v
 
 class VerificationResponse(BaseModel):
@@ -96,7 +95,7 @@ class VerificationResponse(BaseModel):
     expires_in: str
 
 class SocialScoreResponse(BaseModel):
-    nationalId: str
+    fayda_number: str
     socialscore: int
     trust_level: str
     score_breakdown: Dict[str, float]
@@ -227,7 +226,7 @@ async def fetch_tiktok_data(username: str) -> Optional[Dict]:
             return None
 
 async def fetch_facebook_data(username: str) -> Optional[Dict]:
-    """Fetch Facebook user data (placeholder for actual implementation)"""
+    """Fetch Facebook user data"""
     logger.warning("Facebook data fetching not fully implemented")
     return {
         "username": username,
@@ -249,41 +248,27 @@ async def fetch_social_media_data(platform: str, username: str) -> Optional[Dict
     logger.warning(f"Unsupported platform: {platform}")
     return None
 
-async def check_bio_for_code(platform: str, username: str, national_id: str, expected_code: str) -> bool:
+async def check_bio_for_code(platform: str, username: str, fayda_number: str, expected_code: str) -> bool:
     """Verify account ownership by checking bio for code"""
-    stored = verification_storage.get(national_id, {})  # ← Changed to use national_id
+    stored = verification_storage.get(fayda_number, {})
     
     if not stored:
-        logger.warning(f"No verification data found for {national_id}")
+        logger.warning(f"No verification data found for {fayda_number}")
         return False
         
-    # Check attempts
     if stored.get("attempts", 0) >= MAX_VERIFICATION_ATTEMPTS:
-        logger.warning(f"Max attempts reached for {national_id}")
+        logger.warning(f"Max attempts reached for {fayda_number}")
         return False
         
-    # Check expiration
     if datetime.now() > stored.get("expires", datetime.min):
-        logger.warning(f"Code expired for {national_id}")
+        logger.warning(f"Code expired for {fayda_number}")
         return False
 
-    # Rest of the function remains the same...
     profile_data = await fetch_social_media_data(platform, username)
     if not profile_data:
         logger.error(f"Failed to fetch {platform} data for {username}")
         return False
 
-    bio = profile_data.get("biography", "") or profile_data.get("bio", "")
-    cleaned_bio = "".join(c for c in bio if c.isdigit())
-    
-    if expected_code not in cleaned_bio:
-        logger.warning(f"Code not found in bio for {username}")
-        stored["attempts"] = stored.get("attempts", 0) + 1
-        return False
-
-    return True
-
-    # Check bio for code
     bio = profile_data.get("biography", "") or profile_data.get("bio", "")
     cleaned_bio = "".join(c for c in bio if c.isdigit())
     
@@ -302,27 +287,21 @@ def calculate_tiktok_features(profile: Dict) -> Dict:
         videos = max(profile.get('videos_count', 0), 0)
         bio = profile.get('biography', '')
         
-        # Engagement calculations
         engagement = safe_divide(likes, followers, 0)
         
-        # Profile quality
         profile_score = (
             (40 if profile.get('is_verified') else 0) +
             (min(len(bio), MAX_BIO_LENGTH) * 0.06) +
             (30 if profile.get('profile_pic_url') else 0)
         )
         
-        # Network strength
         network_score = (
             (math.log1p(followers) * 10 if followers > 0 else 0) +
             (safe_divide(followers, profile.get('following', 1) + 1) * 5)
-        )
         
-        # Activity level
         activity_score = (
             (min(videos, 1000) * 0.1) +
-            (math.log1p(likes) * 0.5
-        ))
+            (math.log1p(likes) * 0.5)
         
         return {
             'profile_score': max(0, min(100, profile_score)),
@@ -424,12 +403,11 @@ async def send_callback_with_retry(url: str, data: Dict) -> bool:
 @app.post("/request-verification", response_model=VerificationResponse)
 async def request_verification(request: VerificationRequest):
     """Generate and return a verification code"""
-    if not request.socialMedia:
+    if not request.data:
         raise HTTPException(status_code=400, detail="At least one social media profile required")
     
-    # Use nationalId as primary identifier
-    code = generate_verification_code(request.nationalId)
-    platform = request.socialMedia[0].name
+    code = generate_verification_code(request.fayda_number)
+    platform = request.data[0].social_media
     instructions = get_verification_instructions(code, platform)
     
     return VerificationResponse(
@@ -444,107 +422,87 @@ async def verify_and_score(
     background_tasks: BackgroundTasks
 ):
     """Verify account and calculate social score"""
-    # Get stored verification data using nationalId
-    stored = verification_storage.get(request.nationalId)
+    stored = verification_storage.get(request.fayda_number)
     if not stored:
-        logger.error(f"No verification found for nationalId: {request.nationalId}")
-        raise HTTPException(
-            status_code=403, 
-            detail="Please request verification first"
-        )
+        logger.error(f"No verification found for fayda_number: {request.fayda_number}")
+        raise HTTPException(status_code=403, detail="Please request verification first")
     
-    # Check expiration
     if datetime.now() > stored["expires"]:
-        logger.warning(f"Code expired for nationalId: {request.nationalId}")
-        raise HTTPException(
-            status_code=403,
-            detail="Verification code expired. Please request a new one."
-        )
+        logger.warning(f"Code expired for fayda_number: {request.fayda_number}")
+        raise HTTPException(status_code=403, detail="Verification code expired. Please request a new one.")
     
-    # Find first supported platform
     supported_platforms = ["tiktok", "facebook"]
     profile = next(
-        (p for p in request.socialMedia if p.name.lower() in supported_platforms),
+        (p for p in request.data if p.social_media.lower() in supported_platforms),
         None
     )
     
     if not profile:
-        logger.error(f"Unsupported platforms in request: {[p.name for p in request.socialMedia]}")
+        platforms = [p.social_media for p in request.data]
+        logger.error(f"Unsupported platforms in request: {platforms}")
         raise HTTPException(
             status_code=400,
             detail=f"Supported platforms: {', '.join(supported_platforms)}"
         )
     
-    # Verify ownership - CRITICAL CHANGE HERE
     if not await check_bio_for_code(
-        platform=profile.name,
+        platform=profile.social_media,
         username=profile.username,
-        national_id=request.nationalId,  # Pass nationalId to lookup
+        fayda_number=request.fayda_number,
         expected_code=stored["code"]
     ):
         attempts_left = MAX_VERIFICATION_ATTEMPTS - stored.get("attempts", 0)
-        logger.warning(
-            f"Verification failed for {profile.username}. "
-            f"Attempts left: {attempts_left}"
-        )
+        logger.warning(f"Verification failed for {profile.username}. Attempts left: {attempts_left}")
         raise HTTPException(
             status_code=403,
             detail=(
-                f"{profile.name} verification failed. "
+                f"{profile.social_media} verification failed. "
                 f"Attempts left: {attempts_left}. "
                 "Ensure: 1) Code is in bio 2) Account is public "
                 "3) Changes are saved"
             )
         )
     
-    # Mark as verified
     stored["verified"] = True
     logger.info(f"Successfully verified {profile.username}")
 
-    # Get profile data
-    profile_data = await fetch_social_media_data(profile.name, profile.username)
+    profile_data = await fetch_social_media_data(profile.social_media, profile.username)
     if not profile_data:
         logger.error(f"Failed to fetch profile data for {profile.username}")
         raise HTTPException(
             status_code=503,
-            detail=f"Could not fetch {profile.name} profile data. Try again later."
+            detail=f"Could not fetch {profile.social_media} profile data. Try again later."
         )
     
-    # Calculate score
     try:
-        score_result = calculate_social_score(profile.name, profile_data)
-        logger.info(f"Calculated score: {score_result['score']} for {request.nationalId}")
+        score_result = calculate_social_score(profile.social_media, profile_data)
+        logger.info(f"Calculated score: {score_result['score']} for {request.fayda_number}")
     except Exception as e:
         logger.error(f"Scoring failed: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail="Scoring service temporarily unavailable"
-        )
+        raise HTTPException(status_code=500, detail="Scoring service temporarily unavailable")
     
-    # Prepare response
     response = SocialScoreResponse(
-        nationalId=request.nationalId,
+        fayda_number=request.fayda_number,
         socialscore=score_result["score"],
         trust_level=score_result["trust_level"],
         score_breakdown=score_result["score_breakdown"],
         timestamp=datetime.now().isoformat()
     )
     
-    # Async callback if provided
-    if request.callback:
-        logger.info(f"Queueing callback to {request.callback}")
+    if request.callbackUrl:
+        logger.info(f"Queueing callback to {request.callbackUrl}")
         background_tasks.add_task(
             send_callback_with_retry,
-            str(request.callback),
+            str(request.callbackUrl),
             response.dict()
         )
     
     return response
 
-@app.get("/verification-status/{national_id}", response_model=VerificationStatus)
-async def check_verification_status(national_id: str):
+@app.get("/verification-status/{fayda_number}", response_model=VerificationStatus)
+async def check_verification_status(fayda_number: str):
     """Check verification status"""
-    stored = verification_storage.get(national_id)
+    stored = verification_storage.get(fayda_number)
     if not stored:
         return VerificationStatus(status="not_found", message="No verification request found")
     

@@ -5,7 +5,7 @@ pipeline {
         DOCKER_TAG = 'latest'
         // Test variables (customize these)
         TEST_API_URL = 'http://localhost:8000'  // Uses Jenkins' local network
-        TEST_CALLBACK_URL = 'http://192.168.20.49:9696/customer/credit-score'
+        TEST_CALLBACK_URL = 'http://192.168.20.49:9696/customer/social-score'
         TEST_USERNAME = 'testuser'  // Use a real test TikTok username
     }
     stages {

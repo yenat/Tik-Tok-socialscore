@@ -22,7 +22,7 @@ COPY . .
 
 # Environment variables (use direct paths since everything is in /app)
 ENV PORT=8000
-ENV MODEL_PATH=/app/tiktok_scoring_model.pkl  # Direct path to model
+ENV MODEL_PATH=/app/tiktok_scoring_model.pkl  
 ENV SCALING_PARAMS_PATH=/app/scaling_params.pkl
 ENV PYTHONUNBUFFERED=1
 

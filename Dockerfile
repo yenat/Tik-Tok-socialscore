@@ -9,7 +9,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     gcc \
     python3-dev \
-    libgomp1 && \  # Required for scikit-learn
+    libgomp1 && \
     rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies

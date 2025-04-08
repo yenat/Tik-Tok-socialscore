@@ -10,10 +10,7 @@ RUN apt-get update && \
 # 2. Install Python dependencies with VERSION PINNING
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir \
-    scikit-learn==1.6.1 \  
-    joblib==1.4.2 \        
-    -r requirements.txt
+    pip install --no-cache-dir -r requirements.txt
 
 # 3. Copy ALL necessary files
 COPY main.py ./

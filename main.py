@@ -15,6 +15,8 @@ from pydantic import BaseModel, HttpUrl, validator, Field
 import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from httpx import Timeout, Limits
+import pickle
+from sklearn._loss._loss import CyHalfSquaredError  # Import required for unpickling
 
 # Configure logging
 logging.basicConfig(
@@ -53,19 +55,45 @@ CALLBACK_TIMEOUT = 10
 CALLBACK_RETRIES = 3
 MAX_BIO_LENGTH = 500
 
-# Load Model
+# Load Model with proper unpickling setup
 MODEL_PATH = os.getenv('MODEL_PATH', 'tiktok_scoring_model.pkl')
 SCALING_PARAMS_PATH = os.getenv('SCALING_PARAMS_PATH', 'scaling_params.pkl')
 
+def custom_unpickler(file):
+    """Custom unpickler that handles scikit-learn model loading"""
+    def __pyx_unpickle_CyHalfSquaredError(_, __, ___):
+        return CyHalfSquaredError
+    
+    # Create the unpickler
+    unpickler = pickle.Unpickler(file)
+    
+    # Define the custom persistent_load function
+    def persistent_load(pid):
+        if pid[0] == '__pyx_unpickle_CyHalfSquaredError':
+            return __pyx_unpickle_CyHalfSquaredError(*pid[1:])
+        return unpickler.persistent_load(pid)
+    
+    # Assign the custom loader
+    unpickler.persistent_load = persistent_load
+    
+    # Load and return the object
+    return unpickler.load()
+
 try:
-    model = joblib.load(MODEL_PATH)
-    scaling_params = joblib.load(SCALING_PARAMS_PATH)
-    logger.info("Model loaded successfully")
+    # Load model with custom unpickler
+    with open(MODEL_PATH, 'rb') as f:
+        model = custom_unpickler(f)
+    
+    # Load scaling params with custom unpickler
+    with open(SCALING_PARAMS_PATH, 'rb') as f:
+        scaling_params = custom_unpickler(f)
+    
+    logger.info("Model and scaling parameters loaded successfully")
 except Exception as e:
     logger.error(f"Error loading model: {str(e)}")
     raise
 
-# Models
+# Models (remain the same as before)
 class SocialMediaProfile(BaseModel):
     social_media: str = Field(..., alias="social_medai")
     username: str
@@ -109,7 +137,7 @@ class VerificationStatus(BaseModel):
 # Storage
 verification_storage = {}
 
-# Helper Functions
+# Helper Functions (remain the same as before)
 def safe_divide(a: float, b: float) -> float:
     return a / b if b != 0 else 0.0
 
@@ -246,7 +274,7 @@ async def send_callback(url: str, data: Dict) -> bool:
         pass
     return False
 
-# Endpoints
+# Endpoints (remain the same as before)
 @app.post("/request-verification", response_model=VerificationResponse)
 async def request_verification(request: VerificationRequest):
     if not request.data:

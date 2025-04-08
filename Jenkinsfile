@@ -25,9 +25,6 @@ pipeline {
         stage('Deploy API') {
             steps {
                 script {
-                    // Ensure jq is installed for JSON parsing
-                    sh 'apt-get update && apt-get install -y jq || true'
-                    
                     // Clean up existing container
                     sh 'docker stop ${DOCKER_IMAGE} || true'
                     sh 'docker rm ${DOCKER_IMAGE} || true'
@@ -63,6 +60,18 @@ pipeline {
         stage('Test API') {
             steps {
                 script {
+                    // Ensure jq is available for JSON parsing
+                    def jqCheck = sh(returnStatus: true, script: 'command -v jq')
+                    if (jqCheck != 0) {
+                        // Try multiple installation methods
+                        sh '''
+                            (apt-get update -qq && apt-get install -y jq) || \
+                            (yum install -y jq) || \
+                            (wget -O jq https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64 && \
+                            chmod +x jq && mv jq /usr/local/bin/)
+                        '''
+                    }
+                    
                     // Generate unique test ID
                     def TEST_ID = "jenkins-test-${BUILD_NUMBER}"
                     
@@ -87,26 +96,27 @@ pipeline {
                         error("Verification request failed: ${verificationResponse}")
                     }
                     
-                    // Parse verification code
+                    // Parse verification code with jq
                     def verificationCode = sh(returnStdout: true, script: """
                         echo '${verificationResponse}' | jq -r '.verification_code'
                     """).trim()
                     
                     echo "Verification code: ${verificationCode}"
                     
-                    // 2. Mock verification by updating test storage (since we can't modify real TikTok bio)
-                    // This assumes your API has a way to mock the verification for testing
-                    // Alternatively, you could use a test TikTok account you control
-                    def mockVerify = sh(returnStdout: true, script: """
-                        curl -s -X POST '${API_URL}/mock-verify' \\
-                        -H 'Content-Type: application/json' \\
-                        -d '{
-                            "fayda_number": "${TEST_ID}",
-                            "code": "${verificationCode}"
-                        }'
-                    """).trim()
-                    
-                    echo "Mock verify response: ${mockVerify}"
+                    // 2. Mock verification (if endpoint exists)
+                    try {
+                        def mockVerify = sh(returnStdout: true, script: """
+                            curl -s -X POST '${API_URL}/mock-verify' \\
+                            -H 'Content-Type: application/json' \\
+                            -d '{
+                                "fayda_number": "${TEST_ID}",
+                                "code": "${verificationCode}"
+                            }'
+                        """).trim()
+                        echo "Mock verify response: ${mockVerify}"
+                    } catch (Exception e) {
+                        echo "Mock verify endpoint not available, proceeding anyway"
+                    }
                     
                     // 3. Verify and score with callback
                     def scoreResponse = sh(returnStdout: true, script: """

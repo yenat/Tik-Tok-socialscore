@@ -11,8 +11,8 @@ RUN apt-get update && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
-    scikit-learn==1.3.0 \  # Must match your training environment
-    joblib==1.3.0 \
+    scikit-learn \ 
+    joblib \
     -r requirements.txt
 
 # 3. Copy ALL necessary files

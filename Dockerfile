@@ -7,12 +7,12 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc python3-dev curl && \
     rm -rf /var/lib/apt/lists/*
 
-# 2. Install Python dependencies
+# 2. Install Python dependencies with VERSION PINNING
 COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir \
-    scikit-learn \ 
-    joblib \
+    scikit-learn==1.6.1 \  
+    joblib==1.4.2 \        
     -r requirements.txt
 
 # 3. Copy ALL necessary files
@@ -20,7 +20,7 @@ COPY main.py ./
 COPY tiktok_scoring_model.pkl ./
 COPY scaling_params.pkl ./
 
-# 4. Environment variables (optional but recommended)
+# 4. Environment variables
 ENV MODEL_PATH=/app/tiktok_scoring_model.pkl
 ENV SCALING_PARAMS_PATH=/app/scaling_params.pkl
 

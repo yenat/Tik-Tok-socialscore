@@ -95,7 +95,7 @@ except Exception as e:
 
 # Models (remain the same as before)
 class SocialMediaProfile(BaseModel):
-    social_media: str = Field(..., alias="social_medai")
+    social_media: str  # Remove the alias
     username: str
 
     @validator('social_media')

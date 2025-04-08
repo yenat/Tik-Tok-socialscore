@@ -54,44 +54,60 @@ pipeline {
 }
         
         stage('Test API') {
-            steps {
-                script {
-                    // 1. Health Check
-                    sh 'curl -f ${API_URL}/health'
-                    
-                    // 2. Quick Test (bypasses verification)
-                    sh """
-                        curl -v -X POST '${API_URL}/verify-and-score' \\
-                        -H 'Content-Type: application/json' \\
-                        -d '{
-                            "fayda_number": "jenkins-test-${BUILD_NUMBER}",
-                            "type": "*SOCIAL_SCORE*",
-                            "data": [{
-                                "social_media": "TikTok", 
-                                "username": "${TEST_USERNAME}"
-                            }],
-                            "callbackUrl": "${CALLBACK_URL}"
-                        }' || echo "Verification failed (expected without bio update)"
-                    """
-                    
-                    // 3. Full Verification Flow
-                    def TEST_ID = "jenkins-fulltest-${BUILD_NUMBER}"
-                    sh """
-                        curl -v -X POST '${API_URL}/request-verification' \\
-                        -H 'Content-Type: application/json' \\
-                        -d '{
-                            "fayda_number": "${TEST_ID}",
-                            "type": "*SOCIAL_SCORE*",
-                            "data": [{
-                                "social_media": "TikTok",
-                                "username": "${TEST_USERNAME}"
-                            }]
-                        }'
-                    """
-                    echo "Verification code generated for ${TEST_ID}"
-                }
-            }
+    steps {
+        script {
+            // 1. Health Check
+            sh 'curl -f ${API_URL}/health'
+            
+            // 2. Request Verification Code
+            def TEST_ID = "jenkins-test-${BUILD_NUMBER}"
+            def verificationRequest = """
+                curl -s -X POST '${API_URL}/request-verification' \\
+                -H 'Content-Type: application/json' \\
+                -d '{
+                    "fayda_number": "${TEST_ID}",
+                    "type": "*SOCIAL_SCORE*",
+                    "data": [{
+                        "social_media": "TikTok",
+                        "username": "${TEST_USERNAME}"
+                    }]
+                }'
+            """
+            def verificationResponse = sh(returnStdout: true, script: verificationRequest).trim()
+            echo "Verification response: ${verificationResponse}"
+            
+            // Parse verification code from response (assuming JSON output)
+            def verificationCode = sh(returnStdout: true, script: """
+                echo '${verificationResponse}' | jq -r '.verification_code'
+            """).trim()
+            
+            // 3. Simulate Client Adding Code to Bio (MOCK)
+            // In reality, you'd need a test TikTok account with a public API or mocking.
+            echo "MOCK: Test user ${TEST_USERNAME} added code ${verificationCode} to bio"
+            
+            // 4. Call verify-and-score with callback
+            def callbackTest = """
+                curl -v -X POST '${API_URL}/verify-and-score' \\
+                -H 'Content-Type: application/json' \\
+                -d '{
+                    "fayda_number": "${TEST_ID}",
+                    "type": "*SOCIAL_SCORE*",
+                    "data": [{
+                        "social_media": "TikTok",
+                        "username": "${TEST_USERNAME}"
+                    }],
+                    "callbackUrl": "${CALLBACK_URL}"
+                }'
+            """
+            def callbackResponse = sh(returnStdout: true, script: callbackTest).trim()
+            echo "Callback response: ${callbackResponse}"
+            
+            // 5. Verify Callback Received (MOCK)
+            // In reality, you'd need a test server listening at ${CALLBACK_URL}.
+            echo "MOCK: Checking if callback was sent to ${CALLBACK_URL}"
         }
+    }
+}
     }
     post {
         always {

@@ -16,7 +16,7 @@ import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 from httpx import Timeout, Limits
 import pickle
-from sklearn._loss._loss import CyHalfSquaredError  # Import required for unpickling
+from sklearn._loss._loss import CyHalfSquaredError 
 
 # Configure logging
 logging.basicConfig(
@@ -205,12 +205,12 @@ async def fetch_tiktok_data(username: str) -> Optional[Dict]:
             response.raise_for_status()
             
             html = response.text
-            match = re.search(r'"user":\s*({.*?})', html)
+            match = re.search(r'"user":\s*({.*?})\s*,\s*"commerceUserInfo"', html)
             if match:
                 user_data_str = match.group(1)
                 try:
                     # Clean up the JSON string if necessary
-                    user_data_str = user_data_str.replace('\\"', '"')
+                    user_data_str = user_data_str.replace('\u002F', '/')
                     user_data = json.loads(user_data_str)
                     return {
                         "username": username,
@@ -232,7 +232,6 @@ async def fetch_tiktok_data(username: str) -> Optional[Dict]:
         logger.error(f"Unexpected error: {str(e)}")
     
     return None
-
 async def fetch_facebook_data(username: str) -> Optional[Dict]:
     return {
         "username": username,

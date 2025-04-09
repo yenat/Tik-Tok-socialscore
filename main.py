@@ -113,8 +113,9 @@ class VerificationRequest(BaseModel):
 
     @validator('type')
     def validate_type(cls, v):
-        if v != "*SOCIAL_SCORE*":
-            raise ValueError("Invalid type")
+        normalized = v.replace('*', '').upper()
+        if normalized != "SOCIAL_SCORE":
+            raise ValueError("Type must be SOCIAL_SCORE (with or without asterisks)")
         return v
 
 class VerificationResponse(BaseModel):
@@ -124,10 +125,14 @@ class VerificationResponse(BaseModel):
 
 class SocialScoreResponse(BaseModel):
     fayda_number: str
-    socialscore: int
+    type: str = "SOCIAL_SCORE"  # Add this constant field
+    score: int = Field(..., alias="socialscore")  # Rename with alias
     trust_level: str
     score_breakdown: Dict[str, float]
     timestamp: str
+
+class Config:
+    allow_population_by_field_name = True
 
 class VerificationStatus(BaseModel):
     status: str
@@ -333,7 +338,7 @@ async def verify_and_score(request: VerificationRequest, background_tasks: Backg
 
     response = SocialScoreResponse(
         fayda_number=request.fayda_number,
-        socialscore=scale_score(raw_score),
+        score=scale_score(raw_score),  # Use 'score' instead of 'socialscore'
         trust_level=get_trust_level(scale_score(raw_score)),
         score_breakdown={k: round(v, 2) for k, v in features.items()},
         timestamp=datetime.now().isoformat()

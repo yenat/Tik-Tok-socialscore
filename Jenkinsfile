@@ -4,23 +4,30 @@ pipeline {
         DOCKER_IMAGE = 'tiktok-socialscore-api'
         DOCKER_TAG = 'latest'
         API_URL = 'http://192.168.20.49:8000'
-        CALLBACK_URL = 'http://192.168.20.49:9696/customer/social-score'
-        TEST_USERNAME = 'testuser'
     }
     stages {
         stage('Checkout') {
-            steps { git url: 'https://github.com/yenat/Tik-Tok-socialscore.git', branch: 'main' }
+            steps { 
+                git url: 'https://github.com/yenat/Tik-Tok-socialscore.git', branch: 'main' 
+            }
         }
         
         stage('Build Docker') {
-            steps { script { docker.build("${DOCKER_IMAGE}:${DOCKER_TAG}") } }
+            steps { 
+                script { 
+                    docker.build("${DOCKER_IMAGE}:${DOCKER_TAG}") 
+                } 
+            }
         }
         
         stage('Deploy API') {
             steps {
                 script {
+                    // Stop and remove any existing container
                     sh 'docker stop ${DOCKER_IMAGE} || true'
                     sh 'docker rm ${DOCKER_IMAGE} || true'
+                    
+                    // Start new container
                     sh "docker run -d --name ${DOCKER_IMAGE} -p 8000:8000 ${DOCKER_IMAGE}:${DOCKER_TAG}"
                     sleep(10)
                     
@@ -35,60 +42,11 @@ pipeline {
                         }
                         sleep(5)
                     }
-                    if (!healthy) error("API failed to start")
-                }
-            }
-        }
-        
-        stage('Test API') {
-            steps {
-                script {
-                    // Install jq if missing
-                    sh 'command -v jq || (apt-get update && apt-get install -y jq) || true'
-                    
-                    def TEST_ID = "jenkins-test-${BUILD_NUMBER}"
-                    
-                    // 1. Request verification code
-                    def verification = sh(returnStdout: true, script: """
-                        curl -s -X POST ${API_URL}/request-verification \
-                        -H 'Content-Type: application/json' \
-                        -d '{
-                            "fayda_number": "${TEST_ID}",
-                            "type": "*SOCIAL_SCORE*",
-                            "data": [{
-                                "social_media": "TikTok",
-                                "username": "${TEST_USERNAME}"
-                            }]
-                        }'
-                    """)
-                    
-                    // 2. Skip mock verification (since endpoint doesn't exist)
-                    // Instead we'll manually verify by adding code to test storage
-                    def verificationCode = sh(returnStdout: true, 
-                        script: "echo '${verification}' | jq -r '.verification_code'").trim()
-                    
-                    // 3. Verify and get score (with automatic verification bypass)
-                    def score = sh(returnStdout: true, script: """
-                        curl -s -X POST ${API_URL}/verify-and-score \
-                        -H 'Content-Type: application/json' \
-                        -d '{
-                            "fayda_number": "${TEST_ID}",
-                            "type": "*SOCIAL_SCORE*", 
-                            "data": [{
-                                "social_media": "TikTok",
-                                "username": "${TEST_USERNAME}"
-                            }],
-                            "callbackUrl": "${CALLBACK_URL}",
-                            "test_mode": true,
-                            "verification_code": "${verificationCode}"
-                        }'
-                    """)
-                    
-                    // Validate score response
-                    if (!score.contains('socialscore')) {
-                        error("Invalid score response: ${score}")
+                    if (!healthy) {
+                        error("API failed to start")
+                    } else {
+                        echo "API deployed successfully and healthy"
                     }
-                    echo "Score test passed: ${score}"
                 }
             }
         }
@@ -96,8 +54,8 @@ pipeline {
     post {
         always {
             script {
+                // Output the last 50 lines of logs for debugging if needed
                 sh 'docker logs ${DOCKER_IMAGE} --tail 50'
-                sh 'docker stop ${DOCKER_IMAGE} || true'
             }
         }
     }

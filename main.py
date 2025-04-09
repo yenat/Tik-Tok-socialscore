@@ -205,20 +205,32 @@ async def fetch_tiktok_data(username: str) -> Optional[Dict]:
             response.raise_for_status()
             
             html = response.text
-            match = re.search(r'"user":\s*({.+?})', html)
+            match = re.search(r'"user":\s*({.*?})', html)
             if match:
-                user_data = json.loads(match.group(1))
-                return {
-                    "username": username,
-                    "biography": user_data.get("signature", ""),
-                    "is_verified": user_data.get("verified", False),
-                    "followers": user_data.get("followerCount", 0),
-                    "following": user_data.get("followingCount", 0),
-                    "likes": user_data.get("heartCount", 0),
-                    "videos_count": user_data.get("videoCount", 0)
-                }
+                user_data_str = match.group(1)
+                try:
+                    # Clean up the JSON string if necessary
+                    user_data_str = user_data_str.replace('\\"', '"')
+                    user_data = json.loads(user_data_str)
+                    return {
+                        "username": username,
+                        "biography": user_data.get("signature", ""),
+                        "is_verified": user_data.get("verified", False),
+                        "followers": user_data.get("followerCount", 0),
+                        "following": user_data.get("followingCount", 0),
+                        "likes": user_data.get("heartCount", 0),
+                        "videos_count": user_data.get("videoCount", 0)
+                    }
+                except json.JSONDecodeError as json_err:
+                    logger.error(f"JSON decode error: {json_err}")
+                    logger.error(f"Failed JSON string: {user_data_str}")
+            else:
+                logger.error("No user data found in the HTML response.")
+    except httpx.RequestError as req_err:
+        logger.error(f"HTTP request error: {req_err}")
     except Exception as e:
-        logger.error(f"TikTok fetch error: {str(e)}")
+        logger.error(f"Unexpected error: {str(e)}")
+    
     return None
 
 async def fetch_facebook_data(username: str) -> Optional[Dict]:

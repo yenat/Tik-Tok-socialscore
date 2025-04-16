@@ -22,4 +22,4 @@ ENV MODEL_PATH=/app/tiktok_scoring_model.pkl
 ENV SCALING_PARAMS_PATH=/app/scaling_params.pkl
 
 # 5. Run the API
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "192.168.20.49", "--port", "8000"]

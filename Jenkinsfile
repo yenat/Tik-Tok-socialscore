@@ -36,14 +36,7 @@ pipeline {
                             -e API_HOST=0.0.0.0 \
                             ${DOCKER_IMAGE}:${DOCKER_TAG}
                     """
-                    sh """
-                        echo "### Network Inspection ###"
-                        docker inspect ${DOCKER_IMAGE} | grep -i ipaddress
-                        echo "\\n### Process Inspection ###"
-                        docker exec ${DOCKER_IMAGE} ps aux
-                        echo "\\n### Port Check ###"
-                        docker exec ${DOCKER_IMAGE} netstat -tuln
-                    """
+                    
                     // Extended health check with container status verification
                     def healthy = false
                     for (int i = 0; i < 20; i++) {  // Increased from 10 to 20 attempts

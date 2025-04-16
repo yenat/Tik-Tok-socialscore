@@ -33,7 +33,6 @@ pipeline {
                             --name ${DOCKER_IMAGE} \
                             -p 8000:8000 \
                             --restart unless-stopped \
-                            -e API_HOST=0.0.0.0 \  
                             ${DOCKER_IMAGE}:${DOCKER_TAG}
                     """
                     

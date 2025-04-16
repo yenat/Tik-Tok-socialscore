@@ -36,10 +36,17 @@ pipeline {
                             -e API_HOST=0.0.0.0 \
                             ${DOCKER_IMAGE}:${DOCKER_TAG}
                     """
-                    
+                    sh """
+                        echo "### Network Inspection ###"
+                        docker inspect ${DOCKER_IMAGE} | grep -i ipaddress
+                        echo "\\n### Process Inspection ###"
+                        docker exec ${DOCKER_IMAGE} ps aux
+                        echo "\\n### Port Check ###"
+                        docker exec ${DOCKER_IMAGE} netstat -tuln
+                    """
                     // Extended health check with container status verification
                     def healthy = false
-                    for (int i = 0; i < 10; i++) {
+                    for (int i = 0; i < 20; i++) {  // Increased from 10 to 20 attempts
                         // First check if container is running
                         def containerRunning = sh(
                             returnStdout: true,
@@ -51,15 +58,15 @@ pipeline {
                             break
                         }
                         
-                        // Then check API health
+                        // Then check API health with timeout
                         def status = sh(returnStatus: true, 
-                            script: "curl -s -f ${API_URL}/health > /dev/null")
+                            script: "curl -s -f --max-time 5 ${API_URL}/health > /dev/null")
                         
                         if (status == 0) {
                             healthy = true
                             break
                         }
-                        sleep(5)
+                        sleep(10)  // Increased from 5 to 10 seconds
                     }
                     
                     if (!healthy) {

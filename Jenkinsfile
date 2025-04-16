@@ -3,7 +3,7 @@ pipeline {
     environment {
         DOCKER_IMAGE = 'tiktok-socialscore-api'
         DOCKER_TAG = 'latest'
-        API_URL = 'http://192.168.20.49:8000'
+        API_URL = 'http://localhost:8000'
     }
     stages {
         stage('Checkout') {
@@ -28,11 +28,12 @@ pipeline {
                     sh 'docker rm ${DOCKER_IMAGE} || true'
                     
                     // Start new container with restart policy
-                    sh """
+                   sh """
                         docker run -d \
                             --name ${DOCKER_IMAGE} \
                             -p 8000:8000 \
                             --restart unless-stopped \
+                            -e API_HOST=0.0.0.0 \  # Add this environment variable
                             ${DOCKER_IMAGE}:${DOCKER_TAG}
                     """
                     

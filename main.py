@@ -60,48 +60,34 @@ MODEL_PATH = os.getenv('MODEL_PATH', 'tiktok_scoring_model.pkl')
 SCALING_PARAMS_PATH = os.getenv('SCALING_PARAMS_PATH', 'scaling_params.pkl')
 
 def custom_unpickler(file):
-    """Custom unpickler that handles scikit-learn model loading"""
     def __pyx_unpickle_CyHalfSquaredError(_, __, ___):
         return CyHalfSquaredError
-    
-    # Create the unpickler
     unpickler = pickle.Unpickler(file)
-    
-    # Define the custom persistent_load function
     def persistent_load(pid):
         if pid[0] == '__pyx_unpickle_CyHalfSquaredError':
             return __pyx_unpickle_CyHalfSquaredError(*pid[1:])
         return unpickler.persistent_load(pid)
-    
-    # Assign the custom loader
     unpickler.persistent_load = persistent_load
-    
-    # Load and return the object
     return unpickler.load()
 
 try:
-    # Load model with custom unpickler
     with open(MODEL_PATH, 'rb') as f:
         model = custom_unpickler(f)
-    
-    # Load scaling params with custom unpickler
     with open(SCALING_PARAMS_PATH, 'rb') as f:
         scaling_params = custom_unpickler(f)
-    
     logger.info("Model and scaling parameters loaded successfully")
 except Exception as e:
     logger.error(f"Error loading model: {str(e)}")
     raise
 
-# Models (remain the same as before)
 class SocialMediaProfile(BaseModel):
-    social_media: str  # Remove the alias
+    social_media: str
     username: str
 
     @validator('social_media')
     def validate_platform(cls, v):
         v = v.lower()
-        if v not in ["tiktok", "facebook"]:
+        if v != "tiktok":
             raise ValueError("Unsupported platform")
         return v
 
@@ -125,8 +111,8 @@ class VerificationResponse(BaseModel):
 
 class SocialScoreResponse(BaseModel):
     fayda_number: str
-    type: str = "SOCIAL_SCORE"  # Add this constant field
-    score: int = Field(..., alias="socialscore")  # Rename with alias
+    type: str = "SOCIAL_SCORE"
+    score: int = Field(..., alias="socialscore")
     trust_level: str
     score_breakdown: Dict[str, float]
     timestamp: str
@@ -139,10 +125,8 @@ class VerificationStatus(BaseModel):
     message: Optional[str] = None
     verification_code: Optional[str] = None
 
-# Storage
 verification_storage = {}
 
-# Helper Functions (remain the same as before)
 def safe_divide(a: float, b: float) -> float:
     return a / b if b != 0 else 0.0
 
@@ -173,32 +157,18 @@ def generate_verification_code(identifier: str) -> str:
     return code
 
 def get_verification_instructions(code: str, platform: str) -> str:
-    platform = platform.lower()
-    base = (
-        f"=== {platform.upper()} VERIFICATION ===\n"
+    return (
+        f"=== TIKTOK VERIFICATION ===\n"
         f"1. Add to bio: {code}\n"
         f"2. Make account public\n"
         f"3. Save changes\n"
+        f"Location: Edit Profile > Bio"
     )
-    if platform == "tiktok":
-        return base + "Location: Edit Profile > Bio"
-    elif platform == "facebook":
-        return base + "Location: Edit Profile > Intro"
-    return base
-
-async def fetch_social_media_data(platform: str, username: str) -> Optional[Dict]:
-    platform = platform.lower()
-    if platform == "tiktok":
-        return await fetch_tiktok_data(username)
-    elif platform == "facebook":
-        return await fetch_facebook_data(username)
-    return None
 
 async def fetch_tiktok_data(username: str) -> Optional[Dict]:
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 ... Chrome/91.0.4472.124 Safari/537.36",
     }
-    
     try:
         timeout = Timeout(10.0, connect=15.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
@@ -208,69 +178,46 @@ async def fetch_tiktok_data(username: str) -> Optional[Dict]:
                 follow_redirects=True
             )
             response.raise_for_status()
-            
             html = response.text
             match = re.search(r'"user":\s*({.*?})\s*,\s*"commerceUserInfo"', html)
             if match:
-                user_data_str = match.group(1)
-                try:
-                    # Clean up the JSON string if necessary
-                    user_data_str = user_data_str.replace('\u002F', '/')
-                    user_data = json.loads(user_data_str)
-                    return {
-                        "username": username,
-                        "biography": user_data.get("signature", ""),
-                        "is_verified": user_data.get("verified", False),
-                        "followers": user_data.get("followerCount", 0),
-                        "following": user_data.get("followingCount", 0),
-                        "likes": user_data.get("heartCount", 0),
-                        "videos_count": user_data.get("videoCount", 0)
-                    }
-                except json.JSONDecodeError as json_err:
-                    logger.error(f"JSON decode error: {json_err}")
-                    logger.error(f"Failed JSON string: {user_data_str}")
-            else:
-                logger.error("No user data found in the HTML response.")
-    except httpx.RequestError as req_err:
-        logger.error(f"HTTP request error: {req_err}")
+                user_data_str = match.group(1).replace('\u002F', '/')
+                user_data = json.loads(user_data_str)
+                return {
+                    "username": username,
+                    "biography": user_data.get("signature", ""),
+                    "is_verified": user_data.get("verified", False),
+                    "followers": user_data.get("followerCount", 0),
+                    "following": user_data.get("followingCount", 0),
+                    "likes": user_data.get("heartCount", 0),
+                    "videos_count": user_data.get("videoCount", 0)
+                }
     except Exception as e:
-        logger.error(f"Unexpected error: {str(e)}")
-    
+        logger.error(f"Error fetching TikTok data: {e}")
     return None
-async def fetch_facebook_data(username: str) -> Optional[Dict]:
-    return {
-        "username": username,
-        "biography": "",
-        "is_verified": False,
-        "followers": 0,
-        "following": 0,
-        "likes": 0,
-        "posts_count": 0
-    }
+
+async def fetch_social_media_data(platform: str, username: str) -> Optional[Dict]:
+    if platform.lower() == "tiktok":
+        return await fetch_tiktok_data(username)
+    return None
 
 async def check_bio_for_code(platform: str, username: str, fayda_number: str, code: str) -> bool:
     stored = verification_storage.get(fayda_number)
     if not stored or datetime.now() > stored["expires"]:
         return False
-        
     profile_data = await fetch_social_media_data(platform, username)
     if not profile_data:
         return False
-
     bio = profile_data.get("biography", "")
     return code in "".join(c for c in bio if c.isdigit())
 
 def calculate_features(profile: Dict) -> Dict:
     followers = max(profile.get('followers', 0), 0)
     likes = max(profile.get('likes', 0), 0)
-    posts = max(profile.get('videos_count', profile.get('posts_count', 0)), 0)
+    posts = max(profile.get('videos_count', 0), 0)
     bio = profile.get('biography', "")
-    
     return {
-        'profile_score': min(100, (
-            (40 if profile.get('is_verified') else 0) +
-            (min(len(bio), MAX_BIO_LENGTH) * 0.06)
-        )),
+        'profile_score': min(100, ((40 if profile.get('is_verified') else 0) + (min(len(bio), MAX_BIO_LENGTH) * 0.06))),
         'engagement_score': min(100, safe_divide(likes, followers) * 100),
         'network_score': min(100, math.log1p(followers) * 10),
         'activity_score': min(100, (min(posts, 1000) * 0.1) + (math.log1p(likes) * 0.5))
@@ -290,64 +237,50 @@ async def send_callback(url: str, data: Dict) -> bool:
         pass
     return False
 
-# Endpoints (remain the same as before)
+async def poll_for_verification_and_score(fayda_number: str, platform: str, username: str, callback_url: Optional[str]):
+    check_interval = 15
+    max_checks = (VERIFICATION_CODE_EXPIRY_MINUTES * 60) // check_interval
+    for _ in range(max_checks):
+        stored = verification_storage.get(fayda_number)
+        if not stored or datetime.now() > stored["expires"]:
+            return
+        verified = await check_bio_for_code(platform, username, fayda_number, stored["code"])
+        if verified:
+            profile_data = await fetch_social_media_data(platform, username)
+            if profile_data:
+                features = calculate_features(profile_data)
+                raw_score = float(model.predict(pd.DataFrame([[
+                    features['profile_score'],
+                    features['engagement_score'],
+                    features['network_score'],
+                    features['activity_score']
+                ]]))[0])
+                response = SocialScoreResponse(
+                    fayda_number=fayda_number,
+                    score=scale_score(raw_score),
+                    trust_level=get_trust_level(scale_score(raw_score)),
+                    score_breakdown={k: round(v, 2) for k, v in features.items()},
+                    timestamp=datetime.now().isoformat()
+                )
+                if callback_url:
+                    await send_callback(callback_url, response.dict())
+            return
+        await asyncio.sleep(check_interval)
+
 @app.post("/request-verification", response_model=VerificationResponse)
-async def request_verification(request: VerificationRequest):
+async def request_verification(request: VerificationRequest, background_tasks: BackgroundTasks):
     if not request.data:
         raise HTTPException(400, "At least one profile required")
-    
     code = generate_verification_code(request.fayda_number)
     platform = request.data[0].social_media
+    username = request.data[0].username
+    callback_url = request.callbackUrl
+    background_tasks.add_task(poll_for_verification_and_score, request.fayda_number, platform, username, callback_url)
     return VerificationResponse(
         verification_code=code,
         instructions=get_verification_instructions(code, platform),
         expires_in=f"{VERIFICATION_CODE_EXPIRY_MINUTES} minutes"
     )
-
-@app.post("/verify-and-score", response_model=SocialScoreResponse)
-async def verify_and_score(request: VerificationRequest, background_tasks: BackgroundTasks):
-    stored = verification_storage.get(request.fayda_number)
-    if not stored:
-        raise HTTPException(403, "Request verification first")
-    if datetime.now() > stored["expires"]:
-        raise HTTPException(403, "Code expired")
-
-    profile = next((p for p in request.data if p.social_media.lower() in ["tiktok", "facebook"]), None)
-    if not profile:
-        raise HTTPException(400, "Unsupported platform")
-
-    if not await check_bio_for_code(
-        profile.social_media,
-        profile.username,
-        request.fayda_number,
-        stored["code"]
-    ):
-        raise HTTPException(403, "Verification failed")
-
-    profile_data = await fetch_social_media_data(profile.social_media, profile.username)
-    if not profile_data:
-        raise HTTPException(503, "Could not fetch profile data")
-
-    features = calculate_features(profile_data)
-    raw_score = float(model.predict(pd.DataFrame([[
-        features['profile_score'],
-        features['engagement_score'],
-        features['network_score'],
-        features['activity_score']
-    ]]))[0])
-
-    response = SocialScoreResponse(
-        fayda_number=request.fayda_number,
-        score=scale_score(raw_score),  # Use 'score' instead of 'socialscore'
-        trust_level=get_trust_level(scale_score(raw_score)),
-        score_breakdown={k: round(v, 2) for k, v in features.items()},
-        timestamp=datetime.now().isoformat()
-    )
-
-    if request.callbackUrl:
-        background_tasks.add_task(send_callback, str(request.callbackUrl), response.dict())
-
-    return response
 
 @app.get("/verification-status/{fayda_number}", response_model=VerificationStatus)
 async def get_status(fayda_number: str):

@@ -47,7 +47,7 @@ app.add_middleware(
 )
 
 # Configuration
-VERIFICATION_CODE_EXPIRY_MINUTES = 15
+VERIFICATION_CODE_EXPIRY_MINUTES = 3
 MAX_VERIFICATION_ATTEMPTS = 5
 DEFAULT_MIN_SCORE = 300
 DEFAULT_MAX_SCORE = 850
@@ -238,12 +238,12 @@ async def send_callback(url: str, data: Dict) -> bool:
     return False
 
 async def poll_for_verification_and_score(fayda_number: str, platform: str, username: str, callback_url: Optional[str]):
-    check_interval = 15
+    check_interval = 30  # check every 30 seconds
     max_checks = (VERIFICATION_CODE_EXPIRY_MINUTES * 60) // check_interval
     for _ in range(max_checks):
         stored = verification_storage.get(fayda_number)
         if not stored or datetime.now() > stored["expires"]:
-            return
+            break
         verified = await check_bio_for_code(platform, username, fayda_number, stored["code"])
         if verified:
             profile_data = await fetch_social_media_data(platform, username)
@@ -266,6 +266,18 @@ async def poll_for_verification_and_score(fayda_number: str, platform: str, user
                     await send_callback(callback_url, response.dict())
             return
         await asyncio.sleep(check_interval)
+
+    # 🚨 If verification failed after all checks, notify via callback
+    if callback_url:
+        failure_payload = {
+            "fayda_number": fayda_number,
+            "type": "SOCIAL_SCORE",
+            "status": "verification_failed",
+            "message": f"Verification failed for {platform} user @{username} - code not found in bio.",
+            "timestamp": datetime.now().isoformat()
+        }
+        await send_callback(callback_url, failure_payload)
+
 
 @app.post("/request-verification", response_model=VerificationResponse)
 async def request_verification(request: VerificationRequest, background_tasks: BackgroundTasks):

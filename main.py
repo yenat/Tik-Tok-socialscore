@@ -238,36 +238,51 @@ async def send_callback(url: str, data: Dict) -> bool:
     return False
 
 async def poll_for_verification_and_score(fayda_number: str, platform: str, username: str, callback_url: Optional[str]):
-    check_interval = 30  # check every 30 seconds
+    check_interval = int(os.getenv("CHECK_INTERVAL", 30))  # Default 30 sec, override with env var
     max_checks = (VERIFICATION_CODE_EXPIRY_MINUTES * 60) // check_interval
-    for _ in range(max_checks):
+    logger.info(f"[{fayda_number}] Starting verification polling for @{username} every {check_interval}s")
+
+    for i in range(max_checks):
         stored = verification_storage.get(fayda_number)
         if not stored or datetime.now() > stored["expires"]:
+            logger.warning(f"[{fayda_number}] Verification expired or not found during polling")
             break
-        verified = await check_bio_for_code(platform, username, fayda_number, stored["code"])
-        if verified:
+
+        try:
             profile_data = await fetch_social_media_data(platform, username)
             if profile_data:
-                features = calculate_features(profile_data)
-                raw_score = float(model.predict(pd.DataFrame([[
-                    features['profile_score'],
-                    features['engagement_score'],
-                    features['network_score'],
-                    features['activity_score']
-                ]]))[0])
-                response = SocialScoreResponse(
-                    fayda_number=fayda_number,
-                    score=scale_score(raw_score),
-                    trust_level=get_trust_level(scale_score(raw_score)),
-                    score_breakdown={k: round(v, 2) for k, v in features.items()},
-                    timestamp=datetime.now().isoformat()
-                )
-                if callback_url:
-                    await send_callback(callback_url, response.dict())
-            return
+                logger.info(f"[{fayda_number}] Retrieved bio: {profile_data.get('biography', '')}")
+                verified = stored["code"] in "".join(c for c in profile_data.get("biography", "") if c.isdigit())
+                if verified:
+                    logger.info(f"[{fayda_number}] Verification code found! Proceeding to score...")
+                    features = calculate_features(profile_data)
+                    raw_score = float(model.predict(pd.DataFrame([[
+                        features['profile_score'],
+                        features['engagement_score'],
+                        features['network_score'],
+                        features['activity_score']
+                    ]]))[0])
+                    final_score = scale_score(raw_score)
+                    response = SocialScoreResponse(
+                        fayda_number=fayda_number,
+                        score=final_score,
+                        trust_level=get_trust_level(final_score),
+                        score_breakdown={k: round(v, 2) for k, v in features.items()},
+                        timestamp=datetime.now().isoformat()
+                    )
+                    if callback_url:
+                        await send_callback(callback_url, response.dict(by_alias=True))
+                    return
+                else:
+                    logger.info(f"[{fayda_number}] Code not yet in bio")
+            else:
+                logger.warning(f"[{fayda_number}] Could not fetch TikTok profile for @{username}")
+        except Exception as e:
+            logger.exception(f"[{fayda_number}] Error during polling: {str(e)}")
+
         await asyncio.sleep(check_interval)
 
-    # 🚨 If verification failed after all checks, notify via callback
+    logger.error(f"[{fayda_number}] Verification failed after {max_checks} checks")
     if callback_url:
         failure_payload = {
             "fayda_number": fayda_number,
@@ -277,6 +292,7 @@ async def poll_for_verification_and_score(fayda_number: str, platform: str, user
             "timestamp": datetime.now().isoformat()
         }
         await send_callback(callback_url, failure_payload)
+
 
 
 @app.post("/request-verification", response_model=VerificationResponse)

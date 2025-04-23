@@ -167,34 +167,61 @@ def get_verification_instructions(code: str, platform: str) -> str:
 
 async def fetch_tiktok_data(username: str) -> Optional[Dict]:
     headers = {
-        "User-Agent": "Mozilla/5.0 ... Chrome/91.0.4472.124 Safari/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
     }
     try:
-        timeout = Timeout(10.0, connect=15.0)
+        timeout = Timeout(30.0, connect=60.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
+            # First try the mobile page which is often easier to scrape
             response = await client.get(
-                f"https://www.tiktok.com/@{username}",
+                f"https://m.tiktok.com/@{username}",
                 headers=headers,
                 follow_redirects=True
             )
             response.raise_for_status()
             html = response.text
-            match = re.search(r'"user":\s*({.*?})\s*,\s*"commerceUserInfo"', html)
-            if match:
-                user_data_str = match.group(1).replace('\u002F', '/')
-                user_data = json.loads(user_data_str)
-                return {
-                    "username": username,
-                    "biography": user_data.get("signature", ""),
-                    "is_verified": user_data.get("verified", False),
-                    "followers": user_data.get("followerCount", 0),
-                    "following": user_data.get("followingCount", 0),
-                    "likes": user_data.get("heartCount", 0),
-                    "videos_count": user_data.get("videoCount", 0)
-                }
+            
+            # Try multiple patterns to extract user data
+            patterns = [
+                r'"user":\s*({.*?})\s*,\s*"',
+                r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__".*?>(.*?)</script>',
+                r'<script id="SIGI_STATE".*?>(.*?)</script>'
+            ]
+            
+            user_data = None
+            for pattern in patterns:
+                match = re.search(pattern, html, re.DOTALL)
+                if match:
+                    try:
+                        json_str = match.group(1)
+                        json_data = json.loads(json_str)
+                        if 'UserModule' in json_data:
+                            user_data = json_data['UserModule']['users'].get(username, {})
+                        elif 'user' in json_data:
+                            user_data = json_data['user']
+                        if user_data:
+                            break
+                    except json.JSONDecodeError:
+                        continue
+            
+            if not user_data:
+                return None
+                
+            return {
+                "username": username,
+                "biography": user_data.get("signature", ""),
+                "is_verified": user_data.get("verified", False),
+                "followers": user_data.get("followerCount", user_data.get("stats", {}).get("followerCount", 0)),
+                "following": user_data.get("followingCount", user_data.get("stats", {}).get("followingCount", 0)),
+                "likes": user_data.get("heartCount", user_data.get("stats", {}).get("heartCount", 0)),
+                "videos_count": user_data.get("videoCount", user_data.get("stats", {}).get("videoCount", 0))
+            }
+            
     except Exception as e:
-        logger.error(f"Error fetching TikTok data: {e}")
-    return None
+        logger.error(f"Error fetching TikTok data for @{username}: {str(e)}")
+        return None
 
 async def fetch_social_media_data(platform: str, username: str) -> Optional[Dict]:
     if platform.lower() == "tiktok":
@@ -205,14 +232,29 @@ async def fetch_social_media_data(platform: str, username: str) -> Optional[Dict
 async def check_bio_for_code(platform: str, username: str, fayda_number: str, code: str) -> bool:
     stored = verification_storage.get(fayda_number)
     if not stored or datetime.now() > stored["expires"]:
+        logger.warning(f"No active verification found for {fayda_number}")
         return False
+    
+    logger.info(f"Checking {platform} profile @{username} for code {code}")
     profile_data = await fetch_social_media_data(platform, username)
+    
     if not profile_data:
+        logger.warning(f"Could not fetch profile data for @{username}")
         return False
+    
     bio = profile_data.get("biography", "")
-    found = code in "".join(c for c in bio if c.isdigit())
+    logger.info(f"Found bio: {bio}")
+    
+    # More flexible code matching
+    bio_numbers = "".join(c for c in bio if c.isdigit())
+    found = code in bio_numbers
+    
     if found:
-        verification_storage[fayda_number]["verified"] = True  # Add this line
+        logger.info(f"Verification code MATCHED for {fayda_number}")
+        verification_storage[fayda_number]["verified"] = True
+    else:
+        logger.info(f"Code not found in bio (looking for {code} in {bio_numbers})")
+    
     return found
 
 def calculate_features(profile: Dict) -> Dict:

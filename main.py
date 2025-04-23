@@ -213,55 +213,59 @@ async def fetch_tiktok_data(username: str) -> Optional[Dict]:
         timeout = Timeout(30.0, connect=60.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
             # Try desktop site first
-            response = await client.get(
-                f"https://www.tiktok.com/@{username}",
-                headers=headers,
-                follow_redirects=True
-            )
+                    response = await client.get(
+            f"https://www.tiktok.com/@{username}",
+            headers=headers,
+            follow_redirects=True
+        )
+        
+        if response.status_code == 200:
+            html = response.text
             
-            if response.status_code == 200:
-                html = response.text
-                
-                # Updated patterns to match current TikTok HTML
-                patterns = [
-                    r'<script id="SIGI_STATE"[^>]*>(.*?)</script>',
-                    r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
-                    r'"user":\s*({.+?})\s*,\s*"'
-                ]
-                
-                for pattern in patterns:
-                    match = re.search(pattern, html, re.DOTALL)
-                    if match:
-                        try:
-                            json_data = json.loads(match.group(1))
-                            
-                            # Handle different response formats
-                            if 'UserModule' in json_data:
-                                user_data = json_data['UserModule']['users'].get(username, {})
-                            elif 'user' in json_data:
-                                user_data = json_data['user']
-                            elif 'AppContext' in json_data:
-                                user_data = json_data.get('userInfo', {}).get('user', {})
-                            
-                            if user_data:
-                                return {
-                                    "username": username,
-                                    "biography": user_data.get("signature", ""),
-                                    "is_verified": user_data.get("verified", False),
-                                    "followers": user_data.get("followerCount", 
-                                        user_data.get("stats", {}).get("followerCount", 0)),
-                                    "following": user_data.get("followingCount", 
-                                        user_data.get("stats", {}).get("followingCount", 0)),
-                                    "likes": user_data.get("heartCount", 
-                                        user_data.get("stats", {}).get("heartCount", 0)),
-                                    "videos_count": user_data.get("videoCount", 
-                                        user_data.get("stats", {}).get("videoCount", 0))
-                                }
-                        except json.JSONDecodeError as e:
-                            logger.error(f"JSON parse error: {e}")
-                            continue
+            # NEW IMPROVED PARSING LOGIC
+            patterns = [
+                # Current TikTok format (April 2025)
+                r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
+                r'<script id="SIGI_STATE"[^>]*>(.*?)</script>',
+                # Legacy formats
+                r'"user":\s*({.+?})\s*,\s*"'
+            ]
             
-            logger.error(f"Failed to fetch data (Status: {response.status_code})")
+            for pattern in patterns:
+                match = re.search(pattern, html, re.DOTALL)
+                if match:
+                    try:
+                        json_data = json.loads(match.group(1))
+                        logger.debug(f"Raw JSON data: {json_data}")  # Debug logging
+                        
+                        # Handle multiple possible response structures
+                        user_data = (
+                            json_data.get('UserModule', {}).get('users', {}).get(username) or
+                            json_data.get('userInfo', {}).get('user') or
+                            json_data.get('user') or
+                            {}
+                        )
+                        
+                        if user_data:
+                            return {
+                                "username": username,
+                                "biography": user_data.get("signature", ""),
+                                "is_verified": user_data.get("verified", False),
+                                "followers": user_data.get("followerCount", 
+                                    user_data.get("stats", {}).get("followerCount", 0)),
+                                "following": user_data.get("followingCount", 
+                                    user_data.get("stats", {}).get("followingCount", 0)),
+                                "likes": user_data.get("heartCount", 
+                                    user_data.get("stats", {}).get("heartCount", 0)),
+                                "videos_count": user_data.get("videoCount", 
+                                    user_data.get("stats", {}).get("videoCount", 0))
+                            }
+                            
+                    except json.JSONDecodeError as e:
+                        logger.error(f"JSON parse error: {e}")
+                        continue
+                        
+            logger.error("No matching data patterns found in HTML")
             return None
             
     except Exception as e:

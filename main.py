@@ -17,6 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from httpx import Timeout, Limits
 import pickle
 from sklearn._loss._loss import CyHalfSquaredError 
+from functools import wraps
+import time
 
 # Configure logging
 logging.basicConfig(
@@ -54,6 +56,7 @@ DEFAULT_MAX_SCORE = 850
 CALLBACK_TIMEOUT = 10
 CALLBACK_RETRIES = 3
 MAX_BIO_LENGTH = 500
+REQUEST_DELAY = 5  # seconds between TikTok requests
 
 # Load Model with proper unpickling setup
 MODEL_PATH = os.getenv('MODEL_PATH', 'tiktok_scoring_model.pkl')
@@ -79,6 +82,23 @@ try:
 except Exception as e:
     logger.error(f"Error loading model: {str(e)}")
     raise
+
+# Rate limiting decorator
+def rate_limited(max_per_minute):
+    min_interval = 60.0 / max_per_minute
+    def decorator(f):
+        last_time_called = 0.0
+        @wraps(f)
+        async def wrapped(*args, **kwargs):
+            nonlocal last_time_called
+            elapsed = time.time() - last_time_called
+            wait = min_interval - elapsed
+            if wait > 0:
+                await asyncio.sleep(wait)
+            last_time_called = time.time()
+            return await f(*args, **kwargs)
+        return wrapped
+    return decorator
 
 class SocialMediaProfile(BaseModel):
     social_media: str
@@ -165,60 +185,78 @@ def get_verification_instructions(code: str, platform: str) -> str:
         f"Location: Edit Profile > Bio"
     )
 
+@rate_limited(10)  # 10 requests per minute max
 async def fetch_tiktok_data(username: str) -> Optional[Dict]:
+    user_agents = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+        "Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+    ]
+    
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "User-Agent": random.choice(user_agents),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
     }
+    
     try:
         timeout = Timeout(30.0, connect=60.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            # First try the mobile page which is often easier to scrape
-            response = await client.get(
-                f"https://m.tiktok.com/@{username}",
-                headers=headers,
-                follow_redirects=True
-            )
-            response.raise_for_status()
-            html = response.text
-            
-            # Try multiple patterns to extract user data
-            patterns = [
-                r'"user":\s*({.*?})\s*,\s*"',
-                r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__".*?>(.*?)</script>',
-                r'<script id="SIGI_STATE".*?>(.*?)</script>'
-            ]
-            
-            user_data = None
-            for pattern in patterns:
-                match = re.search(pattern, html, re.DOTALL)
-                if match:
-                    try:
-                        json_str = match.group(1)
-                        json_data = json.loads(json_str)
-                        if 'UserModule' in json_data:
-                            user_data = json_data['UserModule']['users'].get(username, {})
-                        elif 'user' in json_data:
-                            user_data = json_data['user']
-                        if user_data:
-                            break
-                    except json.JSONDecodeError:
-                        continue
-            
-            if not user_data:
-                return None
-                
-            return {
-                "username": username,
-                "biography": user_data.get("signature", ""),
-                "is_verified": user_data.get("verified", False),
-                "followers": user_data.get("followerCount", user_data.get("stats", {}).get("followerCount", 0)),
-                "following": user_data.get("followingCount", user_data.get("stats", {}).get("followingCount", 0)),
-                "likes": user_data.get("heartCount", user_data.get("stats", {}).get("heartCount", 0)),
-                "videos_count": user_data.get("videoCount", user_data.get("stats", {}).get("videoCount", 0))
-            }
-            
+            # Try both www and m domains
+            for domain in ["www.tiktok.com", "m.tiktok.com"]:
+                try:
+                    response = await client.get(
+                        f"https://{domain}/@{username}",
+                        headers=headers,
+                        follow_redirects=True
+                    )
+                    
+                    if response.status_code == 404:
+                        return None
+                        
+                    response.raise_for_status()
+                    
+                    # Multiple pattern matching
+                    html = response.text
+                    patterns = [
+                        r'"user":\s*({.+?})\s*,\s*"',
+                        r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.+?)</script>',
+                        r'<script id="SIGI_STATE"[^>]*>(.+?)</script>'
+                    ]
+                    
+                    for pattern in patterns:
+                        match = re.search(pattern, html, re.DOTALL)
+                        if match:
+                            try:
+                                json_data = json.loads(match.group(1))
+                                if 'UserModule' in json_data:
+                                    user_data = json_data['UserModule']['users'].get(username, {})
+                                elif 'user' in json_data:
+                                    user_data = json_data['user']
+                                    
+                                if user_data:
+                                    return {
+                                        "username": username,
+                                        "biography": user_data.get("signature", ""),
+                                        "is_verified": user_data.get("verified", False),
+                                        "followers": user_data.get("followerCount", 0),
+                                        "following": user_data.get("followingCount", 0),
+                                        "likes": user_data.get("heartCount", 0),
+                                        "videos_count": user_data.get("videoCount", 0)
+                                    }
+                            except json.JSONDecodeError:
+                                continue
+                                
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 404:
+                        return None
+                    continue
+                    
+        logger.error(f"Failed to fetch TikTok data after all attempts for @{username}")
+        return None
+        
     except Exception as e:
         logger.error(f"Error fetching TikTok data for @{username}: {str(e)}")
         return None
@@ -228,34 +266,29 @@ async def fetch_social_media_data(platform: str, username: str) -> Optional[Dict
         return await fetch_tiktok_data(username)
     return None
 
-# Update the verification storage when code is found
 async def check_bio_for_code(platform: str, username: str, fayda_number: str, code: str) -> bool:
     stored = verification_storage.get(fayda_number)
     if not stored or datetime.now() > stored["expires"]:
-        logger.warning(f"No active verification found for {fayda_number}")
         return False
-    
-    logger.info(f"Checking {platform} profile @{username} for code {code}")
-    profile_data = await fetch_social_media_data(platform, username)
-    
-    if not profile_data:
-        logger.warning(f"Could not fetch profile data for @{username}")
-        return False
-    
-    bio = profile_data.get("biography", "")
-    logger.info(f"Found bio: {bio}")
-    
-    # More flexible code matching
-    bio_numbers = "".join(c for c in bio if c.isdigit())
-    found = code in bio_numbers
-    
-    if found:
-        logger.info(f"Verification code MATCHED for {fayda_number}")
-        verification_storage[fayda_number]["verified"] = True
-    else:
-        logger.info(f"Code not found in bio (looking for {code} in {bio_numbers})")
-    
-    return found
+        
+    try:
+        profile_data = await fetch_social_media_data(platform, username)
+        if not profile_data:
+            return False
+            
+        bio = profile_data.get("biography", "")
+        # More flexible code matching
+        bio_numbers = "".join(c for c in bio if c.isdigit())
+        found = code in bio_numbers or code[::-1] in bio_numbers  # Check both directions
+        
+        if found:
+            verification_storage[fayda_number]["verified"] = True
+            return True
+            
+    except Exception as e:
+        logger.error(f"Verification check failed for {username}: {str(e)}")
+        
+    return False
 
 def calculate_features(profile: Dict) -> Dict:
     followers = max(profile.get('followers', 0), 0)
@@ -286,44 +319,56 @@ async def send_callback(url: str, data: Dict) -> bool:
 async def poll_for_verification_and_score(fayda_number: str, platform: str, username: str, callback_url: Optional[str]):
     check_interval = 30  # check every 30 seconds
     max_checks = (VERIFICATION_CODE_EXPIRY_MINUTES * 60) // check_interval
-    for _ in range(max_checks):
-        stored = verification_storage.get(fayda_number)
-        if not stored or datetime.now() > stored["expires"]:
-            break
-        verified = await check_bio_for_code(platform, username, fayda_number, stored["code"])
-        if verified:
-            profile_data = await fetch_social_media_data(platform, username)
-            if profile_data:
-                features = calculate_features(profile_data)
-                raw_score = float(model.predict(pd.DataFrame([[
-                    features['profile_score'],
-                    features['engagement_score'],
-                    features['network_score'],
-                    features['activity_score']
-                ]]))[0])
-                response = SocialScoreResponse(
-                    fayda_number=fayda_number,
-                    score=scale_score(raw_score),
-                    trust_level=get_trust_level(scale_score(raw_score)),
-                    score_breakdown={k: round(v, 2) for k, v in features.items()},
-                    timestamp=datetime.now().isoformat()
-                )
-                if callback_url:
-                    await send_callback(callback_url, response.dict())
-            return
-        await asyncio.sleep(check_interval)
+    
+    try:
+        for _ in range(max_checks):
+            stored = verification_storage.get(fayda_number)
+            if not stored or datetime.now() > stored["expires"]:
+                break
+                
+            verified = await check_bio_for_code(platform, username, fayda_number, stored["code"])
+            if verified:
+                profile_data = await fetch_social_media_data(platform, username)
+                if profile_data:
+                    features = calculate_features(profile_data)
+                    raw_score = float(model.predict(pd.DataFrame([[
+                        features['profile_score'],
+                        features['engagement_score'],
+                        features['network_score'],
+                        features['activity_score']
+                    ]]))[0])
+                    response = SocialScoreResponse(
+                        fayda_number=fayda_number,
+                        score=scale_score(raw_score),
+                        trust_level=get_trust_level(scale_score(raw_score)),
+                        score_breakdown={k: round(v, 2) for k, v in features.items()},
+                        timestamp=datetime.now().isoformat()
+                    )
+                    if callback_url:
+                        await send_callback(callback_url, response.dict())
+                return
+                
+            await asyncio.sleep(check_interval)
 
-    # 🚨 If verification failed after all checks, notify via callback
-    if callback_url:
-        failure_payload = {
-            "fayda_number": fayda_number,
-            "type": "SOCIAL_SCORE",
-            "status": "verification_failed",
-            "message": f"Verification failed for {platform} user @{username} - code not found in bio.",
-            "timestamp": datetime.now().isoformat()
-        }
-        await send_callback(callback_url, failure_payload)
-
+        # Verification failed
+        if callback_url:
+            failure_payload = {
+                "fayda_number": fayda_number,
+                "type": "SOCIAL_SCORE",
+                "status": "verification_failed",
+                "message": f"Verification failed for {platform} user @{username}",
+                "timestamp": datetime.now().isoformat()
+            }
+            await send_callback(callback_url, failure_payload)
+            
+    except Exception as e:
+        logger.error(f"Polling failed for {fayda_number}: {str(e)}")
+        if callback_url:
+            await send_callback(callback_url, {
+                "fayda_number": fayda_number,
+                "status": "error",
+                "message": str(e)
+            })
 
 @app.post("/request-verification", response_model=VerificationResponse)
 async def request_verification(request: VerificationRequest, background_tasks: BackgroundTasks):
@@ -340,55 +385,6 @@ async def request_verification(request: VerificationRequest, background_tasks: B
         expires_in=f"{VERIFICATION_CODE_EXPIRY_MINUTES} minutes"
     )
 
-@app.post("/verify-and-score", response_model=SocialScoreResponse)
-async def verify_and_score(request: VerificationRequest, background_tasks: BackgroundTasks):
-    stored = verification_storage.get(request.fayda_number)
-
-    if not stored:
-        raise HTTPException(403, "Request verification first")
-
-    if datetime.now() > stored["expires"]:
-        raise HTTPException(403, "Code expired")
-
-    profile = next((p for p in request.data if p.social_media.lower() in ["tiktok", "facebook"]), None)
-
-    if not profile:
-        raise HTTPException(400, "Unsupported platform")
-
-    if not await check_bio_for_code(
-        profile.social_media,
-        profile.username,
-        request.fayda_number,
-        stored["code"]
-    ):
-        raise HTTPException(403, "Verification failed")
-
-    profile_data = await fetch_social_media_data(profile.social_media, profile.username)
-    if not profile_data:
-        raise HTTPException(503, "Could not fetch profile data")
-
-    features = calculate_features(profile_data)
-    raw_score = float(model.predict(pd.DataFrame([[
-        features['profile_score'],
-        features['engagement_score'],
-        features['network_score'],
-        features['activity_score']
-    ]]))[0])
-
-    response = SocialScoreResponse(
-        fayda_number=request.fayda_number,
-        score=scale_score(raw_score),
-        trust_level=get_trust_level(scale_score(raw_score)),
-        score_breakdown={k: round(v, 2) for k, v in features.items()},
-        timestamp=datetime.now().isoformat()
-    )
-
-    if request.callbackUrl:
-        background_tasks.add_task(send_callback, str(request.callbackUrl), response.dict())
-
-    return response
-
-
 @app.get("/verification-status/{fayda_number}", response_model=VerificationStatus)
 async def get_status(fayda_number: str):
     stored = verification_storage.get(fayda_number)
@@ -397,7 +393,7 @@ async def get_status(fayda_number: str):
     if datetime.now() > stored["expires"]:
         return VerificationStatus(status="expired")
     if stored.get("verified"):
-        return VerificationStatus(status="verified")  # Add this case
+        return VerificationStatus(status="verified")
     return VerificationStatus(
         status="active",
         verification_code=stored["code"],

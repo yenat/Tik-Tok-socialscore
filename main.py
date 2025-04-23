@@ -204,62 +204,64 @@ async def fetch_tiktok_data(username: str) -> Optional[Dict]:
     try:
         timeout = Timeout(30.0, connect=60.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            # Try both www and m domains
-            for domain in ["www.tiktok.com", "m.tiktok.com"]:
-                try:
-                    response = await client.get(
-                        f"https://{domain}/@{username}",
-                        headers=headers,
-                        follow_redirects=True
-                    )
+            # Only using the web version
+            domain = "www.tiktok.com"
+            try:
+                response = await client.get(
+                    f"https://{domain}/@{username}",
+                    headers=headers,
+                    follow_redirects=True
+                )
+                
+                if response.status_code == 404:
+                    return None
                     
-                    if response.status_code == 404:
-                        return None
-                        
-                    response.raise_for_status()
-                    
-                    # Multiple pattern matching
-                    html = response.text
-                    patterns = [
-                        r'"user":\s*({.+?})\s*,\s*"',
-                        r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.+?)</script>',
-                        r'<script id="SIGI_STATE"[^>]*>(.+?)</script>'
-                    ]
-                    
-                    for pattern in patterns:
-                        match = re.search(pattern, html, re.DOTALL)
-                        if match:
-                            try:
-                                json_data = json.loads(match.group(1))
-                                if 'UserModule' in json_data:
-                                    user_data = json_data['UserModule']['users'].get(username, {})
-                                elif 'user' in json_data:
-                                    user_data = json_data['user']
-                                    
-                                if user_data:
-                                    return {
-                                        "username": username,
-                                        "biography": user_data.get("signature", ""),
-                                        "is_verified": user_data.get("verified", False),
-                                        "followers": user_data.get("followerCount", 0),
-                                        "following": user_data.get("followingCount", 0),
-                                        "likes": user_data.get("heartCount", 0),
-                                        "videos_count": user_data.get("videoCount", 0)
-                                    }
-                            except json.JSONDecodeError:
-                                continue
+                response.raise_for_status()
+                
+                # Multiple pattern matching
+                html = response.text
+                patterns = [
+                    r'"user":\s*({.+?})\s*,\s*"',
+                    r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.+?)</script>',
+                    r'<script id="SIGI_STATE"[^>]*>(.+?)</script>'
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, html, re.DOTALL)
+                    if match:
+                        try:
+                            json_data = json.loads(match.group(1))
+                            if 'UserModule' in json_data:
+                                user_data = json_data['UserModule']['users'].get(username, {})
+                            elif 'user' in json_data:
+                                user_data = json_data['user']
                                 
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 404:
-                        return None
-                    continue
-                    
+                            if user_data:
+                                return {
+                                    "username": username,
+                                    "biography": user_data.get("signature", ""),
+                                    "is_verified": user_data.get("verified", False),
+                                    "followers": user_data.get("followerCount", 0),
+                                    "following": user_data.get("followingCount", 0),
+                                    "likes": user_data.get("heartCount", 0),
+                                    "videos_count": user_data.get("videoCount", 0)
+                                }
+                        except json.JSONDecodeError:
+                            continue
+                            
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    return None
+                logger.error(f"HTTP error occurred: {e}")
+                return None
+                
         logger.error(f"Failed to fetch TikTok data after all attempts for @{username}")
         return None
         
     except Exception as e:
         logger.error(f"Error fetching TikTok data for @{username}: {str(e)}")
         return None
+
 
 async def fetch_social_media_data(platform: str, username: str) -> Optional[Dict]:
     if platform.lower() == "tiktok":

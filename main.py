@@ -201,6 +201,7 @@ async def fetch_social_media_data(platform: str, username: str) -> Optional[Dict
         return await fetch_tiktok_data(username)
     return None
 
+# Update the verification storage when code is found
 async def check_bio_for_code(platform: str, username: str, fayda_number: str, code: str) -> bool:
     stored = verification_storage.get(fayda_number)
     if not stored or datetime.now() > stored["expires"]:
@@ -209,7 +210,10 @@ async def check_bio_for_code(platform: str, username: str, fayda_number: str, co
     if not profile_data:
         return False
     bio = profile_data.get("biography", "")
-    return code in "".join(c for c in bio if c.isdigit())
+    found = code in "".join(c for c in bio if c.isdigit())
+    if found:
+        verification_storage[fayda_number]["verified"] = True  # Add this line
+    return found
 
 def calculate_features(profile: Dict) -> Dict:
     followers = max(profile.get('followers', 0), 0)
@@ -350,6 +354,8 @@ async def get_status(fayda_number: str):
         return VerificationStatus(status="not_found")
     if datetime.now() > stored["expires"]:
         return VerificationStatus(status="expired")
+    if stored.get("verified"):
+        return VerificationStatus(status="verified")  # Add this case
     return VerificationStatus(
         status="active",
         verification_code=stored["code"],

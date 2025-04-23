@@ -185,7 +185,6 @@ def get_verification_instructions(code: str, platform: str) -> str:
         f"Location: Edit Profile > Bio"
     )
 
-@rate_limited(10)  # 10 requests per minute max
 async def fetch_tiktok_data(username: str) -> Optional[Dict]:
     user_agents = [
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -198,32 +197,36 @@ async def fetch_tiktok_data(username: str) -> Optional[Dict]:
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.5",
         "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://www.tiktok.com/",
+        "Origin": "https://www.tiktok.com",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
         "Connection": "keep-alive",
+        "Cache-Control": "max-age=0",
     }
     
     try:
+        # Add random delay between 1-3 seconds
+        await asyncio.sleep(random.uniform(1, 3))
+        
         timeout = Timeout(30.0, connect=60.0)
         async with httpx.AsyncClient(timeout=timeout) as client:
-            # Only using the web version
-            domain = "www.tiktok.com"
-            try:
-                response = await client.get(
-                    f"https://{domain}/@{username}",
-                    headers=headers,
-                    follow_redirects=True
-                )
-                
-                if response.status_code == 404:
-                    return None
-                    
-                response.raise_for_status()
-                
-                # Multiple pattern matching
+            # Try desktop site first
+            response = await client.get(
+                f"https://www.tiktok.com/@{username}",
+                headers=headers,
+                follow_redirects=True
+            )
+            
+            if response.status_code == 200:
                 html = response.text
+                
+                # Updated patterns to match current TikTok HTML
                 patterns = [
-                    r'"user":\s*({.+?})\s*,\s*"',
-                    r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.+?)</script>',
-                    r'<script id="SIGI_STATE"[^>]*>(.+?)</script>'
+                    r'<script id="SIGI_STATE"[^>]*>(.*?)</script>',
+                    r'<script id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
+                    r'"user":\s*({.+?})\s*,\s*"'
                 ]
                 
                 for pattern in patterns:
@@ -231,37 +234,39 @@ async def fetch_tiktok_data(username: str) -> Optional[Dict]:
                     if match:
                         try:
                             json_data = json.loads(match.group(1))
+                            
+                            # Handle different response formats
                             if 'UserModule' in json_data:
                                 user_data = json_data['UserModule']['users'].get(username, {})
                             elif 'user' in json_data:
                                 user_data = json_data['user']
-                                
+                            elif 'AppContext' in json_data:
+                                user_data = json_data.get('userInfo', {}).get('user', {})
+                            
                             if user_data:
                                 return {
                                     "username": username,
                                     "biography": user_data.get("signature", ""),
                                     "is_verified": user_data.get("verified", False),
-                                    "followers": user_data.get("followerCount", 0),
-                                    "following": user_data.get("followingCount", 0),
-                                    "likes": user_data.get("heartCount", 0),
-                                    "videos_count": user_data.get("videoCount", 0)
+                                    "followers": user_data.get("followerCount", 
+                                        user_data.get("stats", {}).get("followerCount", 0)),
+                                    "following": user_data.get("followingCount", 
+                                        user_data.get("stats", {}).get("followingCount", 0)),
+                                    "likes": user_data.get("heartCount", 
+                                        user_data.get("stats", {}).get("heartCount", 0)),
+                                    "videos_count": user_data.get("videoCount", 
+                                        user_data.get("stats", {}).get("videoCount", 0))
                                 }
-                        except json.JSONDecodeError:
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSON parse error: {e}")
                             continue
-                            
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code == 404:
-                    return None
-                logger.error(f"HTTP error occurred: {e}")
-                return None
-                
-        logger.error(f"Failed to fetch TikTok data after all attempts for @{username}")
-        return None
-        
+            
+            logger.error(f"Failed to fetch data (Status: {response.status_code})")
+            return None
+            
     except Exception as e:
-        logger.error(f"Error fetching TikTok data for @{username}: {str(e)}")
+        logger.error(f"Request failed: {str(e)}")
         return None
-
 
 async def fetch_social_media_data(platform: str, username: str) -> Optional[Dict]:
     if platform.lower() == "tiktok":

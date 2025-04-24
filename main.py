@@ -465,6 +465,7 @@ async def request_verification(request: VerificationRequest):
 @app.post("/verify-and-score", response_model=SocialScoreResponse)
 async def verify_and_score(request: VerificationRequest, background_tasks: BackgroundTasks):
     # Fetch stored verification data
+    stored["verified"] = True
     stored = verification_storage.get(request.fayda_number)
     
     # Check if verification was requested first
@@ -553,18 +554,19 @@ async def verify_and_score(request: VerificationRequest, background_tasks: Backg
     
     return response
 
-@app.get("/verification-status/{fayda_number}", response_model=VerificationStatus)
+@app.get("/verification-status/{fayda_number}")
 async def get_status(fayda_number: str):
     stored = verification_storage.get(fayda_number)
     if not stored:
-        return VerificationStatus(status="not_found")
+        return {"status": "not_found"}
     if datetime.now() > stored["expires"]:
-        return VerificationStatus(status="expired")
-    return VerificationStatus(
-        status="active",
-        verification_code=stored["code"],
-        message=f"Expires in {(stored['expires'] - datetime.now()).seconds // 60} minutes"
-    )
+        return {"status": "expired"}
+    return {
+        "status": "active",
+        "verified": stored.get("verified", False),  # THIS IS CRUCIAL
+        "verification_code": stored["code"],
+        "expires_in": (stored["expires"] - datetime.now()).seconds
+    }
 
 @app.get("/health")
 async def health_check():

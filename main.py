@@ -554,19 +554,23 @@ async def verify_and_score(request: VerificationRequest, background_tasks: Backg
     
     return response
 
-@app.get("/verification-status/{fayda_number}")
-async def get_status(fayda_number: str):
-    stored = verification_storage.get(fayda_number)
-    if not stored:
-        return {"status": "not_found"}
-    if datetime.now() > stored["expires"]:
-        return {"status": "expired"}
-    return {
-        "status": "active",
-        "verified": stored.get("verified", False),  # THIS IS CRUCIAL
-        "verification_code": stored["code"],
-        "expires_in": (stored["expires"] - datetime.now()).seconds
-    }
+from datetime import datetime
+from flask import jsonify
+
+# Add this GLOBAL variable at the top of your file (near other app configurations)
+verification_states = {}  # Tracks all verification states
+
+@app.route('/verification-status/<fayda_number>', methods=['GET'])
+def verification_status(fayda_number):
+    state = verification_states.get(fayda_number)
+    if not state:
+        return jsonify({"status": "not_found"}), 200
+    
+    # Auto-expire after 5 minutes (adjust if needed)
+    if (datetime.now() - state["timestamp"]).seconds > 300:
+        verification_states[fayda_number]["status"] = "expired"
+    
+    return jsonify({"status": state["status"]}), 200
 
 @app.get("/health")
 async def health_check():

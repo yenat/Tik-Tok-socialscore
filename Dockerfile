@@ -6,8 +6,6 @@ WORKDIR /app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends gcc python3-dev curl && \
     rm -rf /var/lib/apt/lists/*
-RUN pip install flask
-
 
 # Install Python dependencies
 COPY requirements.txt .

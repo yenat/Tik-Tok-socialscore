@@ -555,7 +555,6 @@ async def verify_and_score(request: VerificationRequest, background_tasks: Backg
     
     return response
 
-from flask import Flask, request, jsonify
 
 # Add these at the top with other imports
 from fastapi import BackgroundTasks

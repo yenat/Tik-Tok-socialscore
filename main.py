@@ -559,44 +559,55 @@ async def verify_and_score(request: VerificationRequest, background_tasks: Backg
 # Add these at the top with other imports
 from fastapi import BackgroundTasks
 from typing import Dict
+# Replace the verification_storage with this thread-safe version at the top
+from threading import Lock
+verification_storage = {}
+verification_lock = Lock()
 
-# Replace your verification_storage with this thread-safe version
-verification_states: Dict[str, dict] = {}
-storage_lock = threading.Lock()
+# Then modify your /request-verification endpoint:
+@app.post("/request-verification", response_model=VerificationResponse)
+async def request_verification(request: VerificationRequest):
+    if not request.data:
+        raise HTTPException(status_code=400, detail="At least one profile required")
 
-@app.post("/start-verification")
-async def start_verification(data: dict):
-    """Endpoint called by central-score to initiate verification"""
-    fayda_number = data["fayda_number"]
-    with storage_lock:
-        verification_states[fayda_number] = {
-            "status": "pending",
+    # Generate and store a new verification code
+    code = str(random.randint(100000, 999999))
+    with verification_lock:
+        verification_storage[request.fayda_number] = {
+            "code": code,
+            "expires": datetime.now() + timedelta(minutes=VERIFICATION_CODE_EXPIRY_MINUTES),
+            "attempts": 0,
             "verified": False,
-            "expires": datetime.now() + timedelta(minutes=5),
-            "timestamp": datetime.now()
+            "status": "pending",  # Add explicit status
+            "data": request.dict()  # Store the request data
         }
-    return {"status": "verification_started"}
 
+    platform = request.data[0].social_media
+    return VerificationResponse(
+        verification_code=code,
+        instructions=get_verification_instructions(code, platform),
+        expires_in=f"{VERIFICATION_CODE_EXPIRY_MINUTES} minutes"
+    )
+
+# Update the /verification-status endpoint:
 @app.get("/verification-status/{fayda_number}")
 async def verification_status(fayda_number: str):
-    """Improved status endpoint"""
-    with storage_lock:
-        stored = verification_states.get(fayda_number)
+    with verification_lock:
+        stored = verification_storage.get(fayda_number)
     
     if not stored:
         return {"status": "not_found"}
     
     if datetime.now() > stored["expires"]:
-        with storage_lock:
-            verification_states[fayda_number]["status"] = "expired"
+        with verification_lock:
+            verification_storage[fayda_number]["status"] = "expired"
         return {"status": "expired"}
     
     return {
-        "status": stored["status"],
-        "verified": stored["verified"],
+        "status": stored.get("status", "pending"),
+        "verified": stored.get("verified", False),
         "expires_in": (stored["expires"] - datetime.now()).seconds
     }
-
 @app.get("/health")
 async def health_check():
     return {

@@ -555,31 +555,48 @@ async def verify_and_score(request: VerificationRequest, background_tasks: Backg
     
     return response
 
+from flask import Flask, request, jsonify
 
-# Use a thread-safe dictionary for storage
-verification_storage = {}
+# Add these at the top with other imports
+from fastapi import BackgroundTasks
+from typing import Dict
+
+# Replace your verification_storage with this thread-safe version
+verification_states: Dict[str, dict] = {}
 storage_lock = threading.Lock()
 
-@app.route('/verification-status/<fayda_number>', methods=['GET'])
-def verification_status(fayda_number):
-    with storage_lock:  # Thread-safe access
-        stored = verification_storage.get(fayda_number)
+@app.post("/start-verification")
+async def start_verification(data: dict):
+    """Endpoint called by central-score to initiate verification"""
+    fayda_number = data["fayda_number"]
+    with storage_lock:
+        verification_states[fayda_number] = {
+            "status": "pending",
+            "verified": False,
+            "expires": datetime.now() + timedelta(minutes=5),
+            "timestamp": datetime.now()
+        }
+    return {"status": "verification_started"}
+
+@app.get("/verification-status/{fayda_number}")
+async def verification_status(fayda_number: str):
+    """Improved status endpoint"""
+    with storage_lock:
+        stored = verification_states.get(fayda_number)
     
     if not stored:
-        return jsonify({"status": "not_found"}), 200
+        return {"status": "not_found"}
     
-    current_time = datetime.now()
-    if current_time > stored["expires"]:
+    if datetime.now() > stored["expires"]:
         with storage_lock:
-            verification_storage[fayda_number]["status"] = "expired"
-        return jsonify({"status": "expired"}), 200
+            verification_states[fayda_number]["status"] = "expired"
+        return {"status": "expired"}
     
-    return jsonify({
-        "status": "active",
-        "verified": stored.get("verified", False),
-        "verification_code": stored["code"],
-        "expires_in": (stored["expires"] - current_time).seconds
-    }), 200
+    return {
+        "status": stored["status"],
+        "verified": stored["verified"],
+        "expires_in": (stored["expires"] - datetime.now()).seconds
+    }
 
 @app.get("/health")
 async def health_check():

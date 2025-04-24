@@ -19,6 +19,7 @@ import pickle
 import time
 import numpy as np
 from sklearn._loss._loss import CyHalfSquaredError
+import threading
 
 # Configure logging
 logging.basicConfig(
@@ -554,23 +555,31 @@ async def verify_and_score(request: VerificationRequest, background_tasks: Backg
     
     return response
 
-from datetime import datetime
-from flask import jsonify
 
-# Add this GLOBAL variable at the top of your file (near other app configurations)
-verification_states = {}  # Tracks all verification states
+# Use a thread-safe dictionary for storage
+verification_storage = {}
+storage_lock = threading.Lock()
 
 @app.route('/verification-status/<fayda_number>', methods=['GET'])
 def verification_status(fayda_number):
-    state = verification_states.get(fayda_number)
-    if not state:
+    with storage_lock:  # Thread-safe access
+        stored = verification_storage.get(fayda_number)
+    
+    if not stored:
         return jsonify({"status": "not_found"}), 200
     
-    # Auto-expire after 5 minutes (adjust if needed)
-    if (datetime.now() - state["timestamp"]).seconds > 300:
-        verification_states[fayda_number]["status"] = "expired"
+    current_time = datetime.now()
+    if current_time > stored["expires"]:
+        with storage_lock:
+            verification_storage[fayda_number]["status"] = "expired"
+        return jsonify({"status": "expired"}), 200
     
-    return jsonify({"status": state["status"]}), 200
+    return jsonify({
+        "status": "active",
+        "verified": stored.get("verified", False),
+        "verification_code": stored["code"],
+        "expires_in": (stored["expires"] - current_time).seconds
+    }), 200
 
 @app.get("/health")
 async def health_check():

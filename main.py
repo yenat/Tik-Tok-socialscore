@@ -91,12 +91,21 @@ class ScoreRequest(BaseModel):
     data: List[SocialMediaProfile]
     callbackUrl: Optional[HttpUrl] = None
 
+# In the SocialScoreResponse class, add the type field
 class SocialScoreResponse(BaseModel):
     fayda_number: str
     socialscore: int
-    trust_level: str
+    risk_level: str  # Changed from trust_level
     score_breakdown: Dict[str, float]
     timestamp: str
+    type: str = "SOCIAL_SCORE"  # Added this field
+
+# Modify the get_trust_level function to get_risk_level with inverted logic
+def get_risk_level(score: int) -> str:
+    if score >= 750: return "Low"
+    if score >= 650: return "Medium"
+    if score >= 550: return "High"
+    return "Very High"
 
 # Helpers
 def safe_divide(a: float, b: float) -> float:
@@ -287,14 +296,14 @@ async def calculate_score(request: ScoreRequest, background_tasks: BackgroundTas
             background_tasks.add_task(send_callback, str(request.callbackUrl), error_response)
         raise HTTPException(500, detail=error_response)
 
-    # Prepare success response
+    # In the calculate_score endpoint, update the response_data creation
     response_data = {
         "fayda_number": request.fayda_number,
         "socialscore": score,
-        "trust_level": get_trust_level(score),
+        "risk_level": get_risk_level(score),  # Changed from trust_level
         "score_breakdown": {k: round(v, 2) for k, v in features.items()},
         "timestamp": datetime.utcnow().isoformat(),
-        "type": "SOCIAL_SCORE"  # Added this line
+        "type": "SOCIAL_SCORE"
     }
     
     response = SocialScoreResponse(**response_data)

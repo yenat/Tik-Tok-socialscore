@@ -299,7 +299,7 @@ async def calculate_score(request: ScoreRequest, background_tasks: BackgroundTas
     # In the calculate_score endpoint, update the response_data creation
     response_data = {
         "fayda_number": request.fayda_number,
-        "socialscore": score,
+        "score": score,
         "risk_level": get_risk_level(score),  # Changed from trust_level
         "score_breakdown": {k: round(v, 2) for k, v in features.items()},
         "timestamp": datetime.utcnow().isoformat(),

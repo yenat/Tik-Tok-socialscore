@@ -94,7 +94,7 @@ class ScoreRequest(BaseModel):
 # In the SocialScoreResponse class, add the type field
 class SocialScoreResponse(BaseModel):
     fayda_number: str
-    socialscore: int
+    score: int
     risk_level: str  # Changed from trust_level
     score_breakdown: Dict[str, float]
     timestamp: str

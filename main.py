@@ -232,16 +232,17 @@ async def calculate_score(request: ScoreRequest, background_tasks: BackgroundTas
     tiktok_profile = next((p for p in request.data if p.social_media.lower() == "tiktok"), None)
     
     if not tiktok_profile:
-        error_msg = "No TikTok profile found in request"
+        error_msg = "No TikTok profile provided in request"
         error_response = {
-            "status": "error",
             "message": error_msg,
+            "suggestion": "Please include at least one TikTok profile",
             "received_profiles": [p.social_media for p in request.data],
-            "supported_platform": "tiktok"
+            "supported_platform": "tiktok",
+            "timestamp": datetime.utcnow().isoformat()
         }
         if request.callbackUrl:
             background_tasks.add_task(send_callback, str(request.callbackUrl), error_response)
-        raise HTTPException(400, detail=error_response)
+        raise HTTPException(404, detail=error_response)
 
     # Log if other platforms were included but ignored
     other_profiles = [p for p in request.data if p.social_media.lower() != "tiktok"]
@@ -253,12 +254,12 @@ async def calculate_score(request: ScoreRequest, background_tasks: BackgroundTas
     
     # Handle invalid TikTok profiles
     if not data:
-        error_msg = f"No valid TikTok account found for username: @{tiktok_profile.username}"
+        error_msg = f"We couldn't find a public TikTok account for '@{tiktok_profile.username}'"
         error_response = {
-            "status": "error",
             "message": error_msg,
             "username": tiktok_profile.username,
-            "suggestion": "Please check the username is correct and the account is public"
+            "suggestion": "Please check the username and try again",
+            "timestamp": datetime.utcnow().isoformat()
         }
         
         if request.callbackUrl:
@@ -277,23 +278,26 @@ async def calculate_score(request: ScoreRequest, background_tasks: BackgroundTas
     except Exception as e:
         logger.error(f"Scoring failed: {str(e)}")
         error_response = {
-            "status": "error",
             "message": "Scoring calculation failed",
             "username": tiktok_profile.username,
-            "error_details": str(e)
+            "error_details": str(e),
+            "timestamp": datetime.utcnow().isoformat()
         }
         if request.callbackUrl:
             background_tasks.add_task(send_callback, str(request.callbackUrl), error_response)
         raise HTTPException(500, detail=error_response)
 
     # Prepare success response
-    response = SocialScoreResponse(
-        fayda_number=request.fayda_number,
-        socialscore=score,
-        trust_level=get_trust_level(score),
-        score_breakdown={k: round(v, 2) for k, v in features.items()},
-        timestamp=datetime.utcnow().isoformat()
-    )
+    response_data = {
+        "fayda_number": request.fayda_number,
+        "socialscore": score,
+        "trust_level": get_trust_level(score),
+        "score_breakdown": {k: round(v, 2) for k, v in features.items()},
+        "timestamp": datetime.utcnow().isoformat(),
+        "type": "SOCIAL_SCORE"  # Added this line
+    }
+    
+    response = SocialScoreResponse(**response_data)
 
     # Send success callback if URL provided
     if request.callbackUrl:
@@ -305,7 +309,6 @@ async def calculate_score(request: ScoreRequest, background_tasks: BackgroundTas
         )
 
     return response
-
 
 async def send_callback(url: str, data: Dict) -> bool:
     """Enhanced callback sender with detailed logging"""

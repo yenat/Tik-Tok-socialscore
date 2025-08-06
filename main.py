@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import re
@@ -13,6 +14,9 @@ import uvicorn
 from fastapi.middleware.cors import CORSMiddleware
 import numpy as np
 from math import log1p
+
+CALLBACK_TIMEOUT = 10
+CALLBACK_RETRIES = 3
 
 # --- Configuration ---
 MODEL_PATH = 'tiktok_scoring_model.pkl'
@@ -395,6 +399,53 @@ async def calculate_score(request: CalculateScoreRequest):
     except Exception as e:
         logger.error(f"Scoring error: {str(e)}", exc_info=True)
         raise HTTPException(500, "Internal server error")
+    
+# Callback Sender Function
+async def send_callback(url: str, data: Dict) -> bool:
+    """Enhanced callback sender with detailed logging and retry logic."""
+    callback_id = f"callback_{datetime.utcnow().timestamp()}"
+    logger.info(f"[{callback_id}] Initiating callback to {url}")
+    
+    try:
+        async with httpx.AsyncClient(timeout=CALLBACK_TIMEOUT) as client:
+            for attempt in range(1, CALLBACK_RETRIES + 1):
+                try:
+                    logger.info(f"[{callback_id}] Attempt {attempt}/{CALLBACK_RETRIES}")
+                    response = await client.post(url, json=data)
+                    response.raise_for_status() # Raise an exception for bad status codes (4xx or 5xx)
+                    logger.info(f"[{callback_id}] Callback successful")
+                    return True
+                except httpx.RequestError as e:
+                    logger.warning(f"[{callback_id}] Request failed: {str(e)}")
+                except httpx.HTTPStatusError as e:
+                    logger.warning(f"[{callback_id}] HTTP error: {str(e)}")
+                
+                if attempt < CALLBACK_RETRIES:
+                    await asyncio.sleep(1 * attempt)  # Exponential backoff
+                    
+    except Exception as e:
+        logger.error(f"[{callback_id}] Callback failed completely: {str(e)}", exc_info=True)
+    
+    return False
+
+# Health check endpoint
+@app.get("/health")
+async def health():
+    """Health check endpoint to verify API status and model loading."""
+    return {
+        "status": "healthy",
+        "model_loaded": model is not None,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+# Debug endpoint for TikTok profile data
+@app.get("/debug/tiktok/{username}")
+async def debug_tiktok_profile(username: str):
+    """Debug endpoint to fetch raw TikTok profile data."""
+    data = await fetch_tiktok_data(username)
+    if not data:
+        raise HTTPException(404, "TikTok profile not found")
+    return data
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
